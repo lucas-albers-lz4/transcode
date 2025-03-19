@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 import argparse
-import subprocess
-import os
 import json
-from pathlib import Path
-from tabulate import tabulate
-import psutil
-import time
-import sys
-import signal
+import os
 import platform
-from typing import Dict, Optional, Any, Union
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
+
+import psutil
+from tabulate import tabulate
+
 
 class MediaProcessor:
     def __init__(self):
@@ -209,7 +211,8 @@ class MediaProcessor:
                 }
                 print(f"DEBUG: Final audio info: {json.dumps(analysis['current']['audio'], indent=2)}")
 
-            recommendations = {
+            # Store recommendations directly in the analysis object instead of an unused variable
+            analysis['recommended'] = {
                 'codec': 'libx265',
                 'crf': 28,
                 'preset': 'medium',
@@ -722,7 +725,6 @@ class MediaProcessor:
                 encode_display += f" ({reasons[0]})"  # Show first reason
 
             # Determine which encoder will actually be used based on transcode_file logic
-            will_use_hardware = True  # Default matches transcode_file default
             if analysis['recommended']['codec'] != 'current':
                 if analysis['recommended']['codec'] == 'libx265':
                     encode_display = "HARDWARE (VideoToolbox)"
@@ -872,8 +874,11 @@ class MediaProcessor:
             total_duration = float(probe.stdout.strip())
             test_duration = min(duration, total_duration)
             print(f"Test duration: {test_duration} seconds")
-        except:
-            print("Error getting video duration, using default 60 seconds")
+        except ValueError as e:  # Specify the exception type instead of using bare except
+            print(f"Error getting video duration, using default 60 seconds: {e}")
+            test_duration = duration
+        except Exception as e:  # If other exceptions occur, catch them more specifically
+            print(f"Unexpected error getting video duration: {e}")
             test_duration = duration
 
         results = []
