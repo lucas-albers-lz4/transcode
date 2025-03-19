@@ -23,4 +23,5 @@ wheels/
 
 # Project specific
 media_analysis.json
-/transcoded_media/
+conversion_manifest.json
+venv/*
