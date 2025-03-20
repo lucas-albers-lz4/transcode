@@ -517,7 +517,7 @@ def main():
     
     files = manifest["files"]
     # Filter files based on allowed extensions
-    allowed_extensions = {'.m4v', '.avi', '.mp4', '.mkv'}
+    allowed_extensions = {'.m4v', '.avi', '.mp4', '.mkv', '.mov'}
     files = [file for file in files if Path(file["input_path"]).suffix.lower() in allowed_extensions]
     if args.max_files > 0:
         files = files[:args.max_files]
