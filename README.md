@@ -16,3 +16,6 @@ A Python-based media processing utility optimized for Apple Silicon and Intel pr
 - mediainfo
 
 ## Installation
+```
+uv venv -p python3.13 venv; source venv/bin/activate; uv pip install -r requirements.txt
+```
