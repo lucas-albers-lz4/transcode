@@ -166,6 +166,31 @@ def check_hw_encoders():
     except Exception:
         return {'h264_videotoolbox': False, 'hevc_videotoolbox': False}
 
+def check_dependencies():
+    """Check if required dependencies (ffmpeg & ffprobe) are installed."""
+    dependencies = ['ffmpeg', 'ffprobe']
+    missing = []
+    
+    for cmd in dependencies:
+        try:
+            # Use 'which' on Unix-based systems to find the command location
+            result = subprocess.run(['which', cmd], 
+                                   capture_output=True, 
+                                   text=True)
+            if result.returncode != 0:
+                missing.append(cmd)
+        except Exception:
+            missing.append(cmd)
+    
+    if missing:
+        print(f"ERROR: Missing required dependencies: {', '.join(missing)}")
+        print("Please install ffmpeg with: sudo apt install ffmpeg (Ubuntu/Debian)")
+        print("                         or: sudo dnf install ffmpeg (Fedora)")
+        print("                         or: brew install ffmpeg (macOS)")
+        return False
+    
+    return True
+
 def main():
     parser = argparse.ArgumentParser(description="Scan for media files to convert")
     parser.add_argument("input_dir", help="Input directory to scan")
@@ -174,6 +199,10 @@ def main():
                         help="Output manifest file")
     args = parser.parse_args()
     
+    # Check for ffmpeg/ffprobe
+    if not check_dependencies():
+        return 1
+        
     input_dir = Path(args.input_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
     
