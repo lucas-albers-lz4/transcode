@@ -422,6 +422,15 @@ def convert_file(input_path: str, output_path: str,
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
+    # Fallback if the smart approach fails
+    if not conversion_success and use_hardware:
+        logging.warning("Smart stream handling failed, trying simpler approach...")
+        # Simpler fallback approach - use hardware only for main video, copy everything else
+        ffmpeg_cmd = ['ffmpeg', '-y', '-i', input_path,
+                      '-c:v:0', 'hevc_nvenc', '-preset', 'p4', '-qp', str(crf), '-tag:v', 'hvc1',
+                      '-c:v:1', 'copy', '-c:a', 'copy', '-map', '0', output_path]
+        # Execute fallback command...
+
 def get_audio_streams(filepath):
     """Detect and analyze audio streams in the media file"""
     try:
