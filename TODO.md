@@ -92,6 +92,7 @@ This document outlines the plan for adding a batch media conversion feature to c
 
 ## Future Enhancements
 
+*   ✅ Cross-platform hardware acceleration
 *   Parallel processing for multiple simultaneous transcodes
 *   Kubernetes deployment for distributed processing
 
@@ -155,21 +156,28 @@ This document outlines the plan for adding a batch media conversion feature to c
 * ✅ **Enhanced Progress Monitoring**: Live display of progress percentage, encoding FPS, CPU and RAM usage
 * ✅ **Performance Optimizations**: Eliminated unused variables and optimized memory usage
 * ✅ **Hardware Acceleration Support**: Added support for VideoToolbox on macOS
+* ✅ **Cross-Platform Hardware Support**: Added NVIDIA GPU support on Linux with fallback
 * ✅ **Improved Error Handling**: Added cleanup for failed transcodes and better error reporting
 * ✅ **Dry Run Mode**: Added ability to preview conversion operations without executing them
 * ✅ **Signal Handling**: Added support for graceful termination with SIGINT/SIGTERM
+* ✅ **Path Resolution**: Fixed script path resolution to handle execution from any directory
+* ✅ **Directory Management**: Added validation for output directory permissions and improved creation handling
 
 ## Pending Tasks
 
 * Add parallel processing for multiple simultaneous transcodes
 * Add retry logic for IO errors
-* Add validation for output directory permissions
 
 ## Design Decisions
 
-* **File Handling**: The system will process .mkv, .mp4, .m4v, .avi, and .mov extensions. Future enhancement: use ffmpeg's capability to identify valid media files regardless of extension, allowing for processing of any media file that ffmpeg can decode.
-* **Output Directory**: Output path is specified as a command-line argument for maximum flexibility.
+* **File Handling**: The system will process .mkv, .mp4, .m4v, .avi, and .mov extensions. Current implementation already includes all of these extensions in `convert_media.py` on line 520. Future enhancement: use ffmpeg's capability to identify valid media files regardless of extension.
+* **Output Directory**: Output path is specified as a command-line argument for maximum flexibility. The system will attempt to create the output directory if it doesn't exist and validate that it is writable.
 * **Overwrite Behavior**: If an output file already exists (and is not zero-sized), it will be skipped to support resumability.
+* **Script Location**: The system now uses absolute paths to find component scripts regardless of the current working directory.
+* **Cross-Platform Hardware Support**: The system now supports hardware acceleration on:
+  * macOS: Using VideoToolbox encoder
+  * Linux: Using NVIDIA NVENC encoder with graceful fallback to software
+* **Directory Creation and Permission Handling**: The system now properly creates output directories with error handling and validates write permissions before starting transcoding.
 
 ## Notes related to current code:
 ### Core Functionality Gaps
