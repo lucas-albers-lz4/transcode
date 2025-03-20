@@ -31,6 +31,69 @@ def is_h265_encoded(filepath: Path) -> bool:
         print(f"Error checking codec for {filepath}: {e}")
         return False
 
+def get_media_info(filepath: Path) -> dict:
+    """Get detailed media file information."""
+    info = {
+        "video_codec": "unknown",
+        "audio_codec": "unknown",
+        "audio_channels": 0,
+        "audio_bitrate": "unknown",
+        "duration": 0,
+        "resolution": "unknown"
+    }
+    
+    try:
+        # Get video info
+        video_result = subprocess.run([
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=codec_name,width,height',
+            '-of', 'json',
+            str(filepath)
+        ], capture_output=True, text=True)
+        
+        video_data = json.loads(video_result.stdout)
+        if 'streams' in video_data and video_data['streams']:
+            stream = video_data['streams'][0]
+            info["video_codec"] = stream.get('codec_name', 'unknown')
+            if 'width' in stream and 'height' in stream:
+                info["resolution"] = f"{stream['width']}x{stream['height']}"
+        
+        # Get audio info
+        audio_result = subprocess.run([
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'a:0',
+            '-show_entries', 'stream=codec_name,channels,bit_rate',
+            '-of', 'json',
+            str(filepath)
+        ], capture_output=True, text=True)
+        
+        audio_data = json.loads(audio_result.stdout)
+        if 'streams' in audio_data and audio_data['streams']:
+            stream = audio_data['streams'][0]
+            info["audio_codec"] = stream.get('codec_name', 'unknown')
+            info["audio_channels"] = int(stream.get('channels', 0))
+            if 'bit_rate' in stream and stream['bit_rate'].isdigit():
+                bitrate = int(stream['bit_rate'])
+                info["audio_bitrate"] = f"{bitrate//1000}k"
+        
+        # Get duration
+        format_result = subprocess.run([
+            'ffprobe', '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            str(filepath)
+        ], capture_output=True, text=True)
+        
+        if format_result.stdout.strip():
+            info["duration"] = float(format_result.stdout.strip())
+            
+        return info
+        
+    except Exception as e:
+        print(f"Error getting media info for {filepath}: {e}")
+        return info
+
 def find_media_files(input_dir: Path, output_dir: Path) -> List[Dict[str, Any]]:
     """
     Find all media files recursively that need conversion.
@@ -58,16 +121,28 @@ def find_media_files(input_dir: Path, output_dir: Path) -> List[Dict[str, Any]]:
             print(f"Skipping in-progress file: {rel_path}")
             continue
             
+        # Get media information
+        media_info = get_media_info(filepath)
+        
         # Calculate output directory
         output_dir_path = output_path.parent
         
-        to_convert.append({
+        file_info = {
             "input_path": str(filepath),
             "output_path": str(output_path),
             "output_dir": str(output_dir_path),
             "relative_path": str(rel_path),
-            "size": filepath.stat().st_size
-        })
+            "size": filepath.stat().st_size,
+            "video_codec": media_info["video_codec"],
+            "audio_codec": media_info["audio_codec"],
+            "audio_channels": media_info["audio_channels"],
+            "audio_bitrate": media_info["audio_bitrate"],
+            "resolution": media_info["resolution"],
+            "duration": media_info["duration"]
+        }
+        
+        print(f"Found: {rel_path} ({file_info['video_codec']}/{file_info['audio_codec']}, {file_info['resolution']})")
+        to_convert.append(file_info)
     
     return to_convert
 
