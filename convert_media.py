@@ -114,21 +114,32 @@ def convert_file(input_path: str, output_path: str,
                 '-allow_sw', '1',
             ])
         elif system == 'Linux':
-            # Check for NVIDIA GPU
+            # Check for NVIDIA GPU and NVENC support
             has_nvidia = False
+            has_nvenc = False
+            
             try:
                 # Check if nvidia-smi command exists and returns successfully
                 nvidia_check = subprocess.run(['nvidia-smi'], 
-                                             stdout=subprocess.DEVNULL, 
-                                             stderr=subprocess.DEVNULL, 
-                                             check=False)
+                                           stdout=subprocess.DEVNULL, 
+                                           stderr=subprocess.DEVNULL, 
+                                           check=False)
                 has_nvidia = nvidia_check.returncode == 0
+                
+                # Check if ffmpeg has nvenc support
+                if has_nvidia:
+                    nvenc_check = subprocess.run(['ffmpeg', '-encoders'], 
+                                                capture_output=True, 
+                                                text=True)
+                    has_nvenc = 'hevc_nvenc' in nvenc_check.stdout
             except:
                 has_nvidia = False
+                has_nvenc = False
             
-            if has_nvidia:
+            if has_nvidia and has_nvenc:
                 # Use NVIDIA hardware acceleration
                 cmd.extend([
+                    '-hwaccel', 'cuda',  # Add this for better performance
                     '-c:v', 'hevc_nvenc',
                     '-preset', 'p4',  # Options: p1-p7 (p7=highest quality, p1=highest performance)
                     '-qp', '24',  # Quality parameter, similar to CRF
@@ -137,7 +148,13 @@ def convert_file(input_path: str, output_path: str,
                 print("Using NVIDIA hardware acceleration (NVENC) on Linux")
             else:
                 # Fall back to software encoding
-                print("NVIDIA GPU not detected. Falling back to software encoding.")
+                if has_nvidia and not has_nvenc:
+                    print("NVIDIA GPU detected but FFmpeg lacks NVENC support. Using software encoding.")
+                    print("Install FFmpeg with NVENC support for hardware acceleration.")
+                    print("You may need to compile FFmpeg with --enable-cuda-llvm or --enable-ffnvcodec.")
+                elif not has_nvidia:
+                    print("NVIDIA GPU not detected. Using software encoding.")
+                
                 cmd.extend([
                     '-c:v', 'libx265',
                     '-preset', 'medium',
@@ -557,6 +574,7 @@ def check_dependencies():
         print(f"ERROR: Missing required dependencies: {', '.join(missing)}")
         print("Please install ffmpeg")
         
+        import platform
         system = platform.system()
         
         if system == 'Darwin':  # macOS
@@ -566,11 +584,16 @@ def check_dependencies():
             print("yum install ffmpeg      # For CentOS/RHEL")
             print("\nFor NVIDIA hardware acceleration support:")
             print("1. Ensure NVIDIA drivers are installed")
-            print("2. Install FFmpeg with NVENC support")
+            print("2. Install or compile FFmpeg with NVENC support:")
+            print("   - Ubuntu: apt install ffmpeg nvidia-cuda-toolkit")
+            print("   - Or compile FFmpeg with: --enable-cuda-llvm --enable-ffnvcodec")
         return False
     
-    # Check for FFmpeg with NVIDIA support if on Linux and nvidia-smi exists
-    if platform.system() == 'Linux':
+    # Check for hardware encoder support if relevant
+    import platform
+    system = platform.system()
+    
+    if system == 'Linux':
         try:
             # Check if nvidia-smi command exists
             nvidia_exists = subprocess.run(['which', 'nvidia-smi'], 
@@ -578,13 +601,18 @@ def check_dependencies():
                                          text=True).returncode == 0
             
             if nvidia_exists:
-                # Check if ffmpeg has nvenc
-                ffmpeg_nvenc = subprocess.run(['ffmpeg', '-encoders'], 
-                                            capture_output=True, 
-                                            text=True)
-                if 'hevc_nvenc' not in ffmpeg_nvenc.stdout:
+                # Check if ffmpeg has nvenc support
+                nvenc_check = subprocess.run(['ffmpeg', '-encoders'], 
+                                          capture_output=True, 
+                                          text=True)
+                if 'hevc_nvenc' not in nvenc_check.stdout:
                     print("WARNING: NVIDIA GPU detected, but FFmpeg is not compiled with NVENC support.")
-                    print("You may need to install a version of FFmpeg with NVENC support for hardware acceleration.")
+                    print("You will not be able to use hardware acceleration.")
+                    print("\nFor NVIDIA hardware acceleration support:")
+                    print("1. Install or compile FFmpeg with NVENC support:")
+                    print("   - Ubuntu: apt install ffmpeg nvidia-cuda-toolkit")
+                    print("   - Or compile FFmpeg with: --enable-cuda-llvm --enable-ffnvcodec")
+                    print("\nWill use software encoding for now.")
         except:
             pass  # Silently ignore any errors in the additional check
     
