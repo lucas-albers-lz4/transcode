@@ -35,7 +35,9 @@ def setup_signal_handlers():
 def convert_file(input_path: str, output_path: str, 
                  crf: int = 24, 
                  use_hardware: bool = False,
-                 dry_run: bool = False) -> bool:
+                 dry_run: bool = False,
+                 debug: bool = False,
+                 archive: bool = False) -> bool:
     """Convert a single file to h265 with proper audio handling"""
     global current_process
     
@@ -52,8 +54,22 @@ def convert_file(input_path: str, output_path: str,
     
     # Check if output file already exists and has content
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-        print(f"Output file already exists, skipping: {output_path}")
-        return True
+        # Validate that the file is a valid h265/HEVC video
+        is_valid = is_valid_hevc_file(output_path)
+        if is_valid:
+            print(f"Valid output file already exists, skipping: {output_path}")
+            return True
+        else:
+            print(f"WARNING: Existing output file {output_path} is corrupt or not h265. Re-encoding.")
+            # Optionally rename the corrupt file instead of overwriting
+            if os.path.exists(output_path):
+                corrupt_path = f"{output_path}.corrupt"
+                try:
+                    os.rename(output_path, corrupt_path)
+                    print(f"Renamed corrupt file to {corrupt_path}")
+                except Exception as e:
+                    print(f"Failed to rename corrupt file: {e}")
+                    # If we can't rename, we'll just overwrite
     
     # Analyze input file audio streams
     audio_streams = get_audio_streams(input_path)
@@ -74,10 +90,15 @@ def convert_file(input_path: str, output_path: str,
         'ffmpeg',
         '-y',  # Overwrite output without asking
         '-i', input_path,
-        '-progress', 'pipe:1',
-        '-nostdin',
-        '-stats'
     ]
+    
+    # Only add progress pipe if not in debug mode
+    if not debug:
+        cmd.extend([
+            '-progress', 'pipe:1',
+            '-nostdin',
+            '-stats'
+        ])
     
     # Video encoding settings
     if use_hardware:
@@ -88,11 +109,22 @@ def convert_file(input_path: str, output_path: str,
             '-allow_sw', '1',
         ])
     else:
-        cmd.extend([
-            '-c:v', 'libx265',
-            '-preset', 'medium',
-            '-crf', str(crf),
-        ])
+        # Determine preset and CRF based on archive mode
+        if archive:
+            preset = 'slower'
+            archive_crf = crf + 4  # Higher CRF for better compression
+            cmd.extend([
+                '-c:v', 'libx265',
+                '-preset', preset,
+                '-crf', str(archive_crf),
+            ])
+            print(f"Using archive mode: preset={preset}, crf={archive_crf}")
+        else:
+            cmd.extend([
+                '-c:v', 'libx265',
+                '-preset', 'medium',
+                '-crf', str(crf),
+            ])
     
     # Process each audio stream
     if audio_streams:
@@ -155,87 +187,149 @@ def convert_file(input_path: str, output_path: str,
         
         # Run conversion
         start_time = time.time()
-        current_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            bufsize=1
-        )
         
-        # Enhanced progress monitoring
-        progress = 0
-        last_progress_time = time.time()
-        total_duration = None
-        frames_encoded = 0
-        encoding_fps = 0
+        if debug:
+            # In debug mode, just run the process and stream output directly
+            print("DEBUG MODE: Showing raw ffmpeg output")
+            result = subprocess.run(cmd, check=False)
+            success = result.returncode == 0
             
-        while current_process.poll() is None:
-            stdout_line = current_process.stdout.readline()
-            if not stdout_line:
-                continue
+            if success:
+                duration = time.time() - start_time
                 
-            # Parse duration info
-            if 'Duration' in stdout_line:
-                duration_match = re.search(r'Duration: (\d+):(\d+):(\d+)', stdout_line)
-                if duration_match:
-                    h, m, s = map(int, duration_match.groups())
-                    total_duration = h * 3600 + m * 60 + s
-            
-            # Track frames and calculate FPS
-            if 'frame=' in stdout_line:
-                frame_match = re.search(r'frame=\s*(\d+)', stdout_line)
-                if frame_match:
-                    current_frame = int(frame_match.group(1))
-                    frames_elapsed = current_frame - frames_encoded
-                    frames_encoded = current_frame
-                    time_elapsed = time.time() - last_progress_time
-                    if time_elapsed > 0:
-                        encoding_fps = frames_elapsed / time_elapsed
-            
-            # Parse progress info
-            if 'time=' in stdout_line:
-                time_match = re.search(r'time=(\d+):(\d+):(\d+)', stdout_line)
-                if time_match and total_duration:
-                    h, m, s = map(int, time_match.groups())
-                    current_time = h * 3600 + m * 60 + s
-                    progress = (current_time / total_duration) * 100
-            
-            # Only update display every second
-            if time.time() - last_progress_time >= 1:
-                # Get system stats
-                cpu_percent = psutil.cpu_percent()
-                memory_percent = psutil.virtual_memory().percent
-                
-                print(f"\rProgress: {progress:.1f}% | FPS: {encoding_fps:.1f} | CPU: {cpu_percent}% | RAM: {memory_percent}%", 
-                      end='', flush=True)
-                last_progress_time = time.time()
-        
-        # Get final results
-        stdout, stderr = current_process.communicate()
-        
-        if current_process.returncode == 0:
-            duration = time.time() - start_time
-            
-            # Verify output and report size difference
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                output_size = os.path.getsize(output_path)
-                output_size_mb = output_size / (1024 * 1024)
-                size_diff_mb = input_size_mb - output_size_mb
-                size_reduction_pct = (size_diff_mb / input_size_mb) * 100 if input_size_mb > 0 else 0
-                avg_fps = frames_encoded / duration if duration > 0 else 0
-                
-                # Single line output format for easier parsing
-                print(f"\nTime: ({duration:.1f} seconds), File Size: {output_size_mb:.2f} MB, " +
-                      f"Size Reduction: ({size_reduction_pct:.1f}%), Encode Speed: ({avg_fps:.1f} FPS)")
-                
-                return True
+                # Verify output and report size difference
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    output_size = os.path.getsize(output_path)
+                    output_size_mb = output_size / (1024 * 1024)
+                    size_diff_mb = input_size_mb - output_size_mb
+                    size_reduction_pct = (size_diff_mb / input_size_mb) * 100 if input_size_mb > 0 else 0
+                    
+                    # Basic output information since we don't have frame stats
+                    print(f"\nTime: ({duration:.1f} seconds), File Size: {output_size_mb:.2f} MB, " +
+                          f"Size Reduction: ({size_reduction_pct:.1f}%)")
+                    
+                    return True
+                else:
+                    print(f"Error: Output file missing or empty: {output_path}")
+                    return False
             else:
-                print(f"Error: Output file missing or empty: {output_path}")
+                print(f"\nError converting file, ffmpeg exited with code {result.returncode}")
                 return False
         else:
-            print(f"\nError converting file: {stderr}")
-            return False
+            # Normal mode with progress tracking
+            current_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                bufsize=1  # Line buffering
+            )
+            
+            # Enhanced progress monitoring with timeout
+            progress = 0
+            last_progress_time = time.time()
+            last_activity_time = time.time()  # Track when we last saw activity
+            activity_timeout = 30  # Seconds to wait before assuming process is stuck
+            total_duration = None
+            frames_encoded = 0
+            encoding_fps = 0
+            
+            while current_process.poll() is None:
+                # Use select with timeout to prevent blocking indefinitely
+                import select
+                ready, _, _ = select.select([current_process.stdout], [], [], 1.0)
+                
+                if ready:
+                    stdout_line = current_process.stdout.readline()
+                    last_activity_time = time.time()  # Reset activity timer
+                else:
+                    # No data available, check if process is stuck
+                    if time.time() - last_activity_time > activity_timeout:
+                        print(f"\nWARNING: No activity for {activity_timeout} seconds, process may be stuck")
+                        # Check file size to see if it's growing
+                        if os.path.exists(output_path):
+                            current_size = os.path.getsize(output_path)
+                            print(f"Current output size: {current_size/(1024*1024):.2f} MB")
+                    
+                    # Sleep briefly to reduce CPU usage
+                    time.sleep(0.1)
+                    continue
+                
+                if not stdout_line:
+                    continue
+                
+                # Parse duration info
+                if 'Duration' in stdout_line:
+                    duration_match = re.search(r'Duration: (\d+):(\d+):(\d+)', stdout_line)
+                    if duration_match:
+                        h, m, s = map(int, duration_match.groups())
+                        total_duration = h * 3600 + m * 60 + s
+                
+                # Track frames and calculate FPS
+                if 'frame=' in stdout_line:
+                    frame_match = re.search(r'frame=\s*(\d+)', stdout_line)
+                    if frame_match:
+                        current_frame = int(frame_match.group(1))
+                        frames_elapsed = current_frame - frames_encoded
+                        frames_encoded = current_frame
+                        time_elapsed = time.time() - last_progress_time
+                        if time_elapsed > 0:
+                            encoding_fps = frames_elapsed / time_elapsed
+                
+                # Parse progress info
+                if 'time=' in stdout_line:
+                    time_match = re.search(r'time=(\d+):(\d+):(\d+)', stdout_line)
+                    if time_match and total_duration:
+                        h, m, s = map(int, time_match.groups())
+                        current_time = h * 3600 + m * 60 + s
+                        progress = (current_time / total_duration) * 100
+                
+                # Only update display every second, but ensure we're checking for stalled process
+                if time.time() - last_progress_time >= 1:
+                    # Get system stats
+                    cpu_percent = psutil.cpu_percent()
+                    memory_percent = psutil.virtual_memory().percent
+                    
+                    # Include process activity time in status
+                    activity_seconds = int(time.time() - last_activity_time)
+                    print(f"\rProgress: {progress:.1f}% | FPS: {encoding_fps:.1f} | CPU: {cpu_percent}% | RAM: {memory_percent}% | Idle: {activity_seconds}s", 
+                          end='', flush=True)
+                    last_progress_time = time.time()
+                    
+                    # If no progress for too long, print additional debug info
+                    if activity_seconds > 20:
+                        # Force stderr read to get any error messages
+                        error_output = ""
+                        if current_process.stderr:
+                            error_output = current_process.stderr.read(1024)
+                        if error_output:
+                            print(f"\nFFmpeg stderr: {error_output}")
+            
+            # Get final results
+            stdout, stderr = current_process.communicate()
+            
+            if current_process.returncode == 0:
+                duration = time.time() - start_time
+                
+                # Verify output and report size difference
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    output_size = os.path.getsize(output_path)
+                    output_size_mb = output_size / (1024 * 1024)
+                    size_diff_mb = input_size_mb - output_size_mb
+                    size_reduction_pct = (size_diff_mb / input_size_mb) * 100 if input_size_mb > 0 else 0
+                    avg_fps = frames_encoded / duration if duration > 0 else 0
+                    
+                    # Single line output format for easier parsing
+                    print(f"\nTime: ({duration:.1f} seconds), File Size: {output_size_mb:.2f} MB, " +
+                          f"Size Reduction: ({size_reduction_pct:.1f}%), Encode Speed: ({avg_fps:.1f} FPS)")
+                    
+                    return True
+                else:
+                    print(f"Error: Output file missing or empty: {output_path}")
+                    return False
+            else:
+                print(f"\nError converting file: {stderr}")
+                return False
     
     except Exception as e:
         print(f"Exception during conversion: {e}")
@@ -349,6 +443,57 @@ def verify_output_file(output_path):
         logging.error(f"Verification error: {e}")
         return False
 
+def is_valid_hevc_file(file_path):
+    """Check if the file is a valid HEVC/h265 video file"""
+    try:
+        # Run ffprobe to get stream information
+        cmd = [
+            'ffprobe',
+            '-v', 'error',
+            '-select_streams', 'v:0',  # Select first video stream
+            '-show_entries', 'stream=codec_name',
+            '-of', 'json',
+            file_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        if result.returncode != 0:
+            print(f"FFprobe error: {result.stderr}")
+            return False
+            
+        # Parse the JSON output
+        data = json.loads(result.stdout)
+        
+        # Check if streams exist and first video stream is h265/HEVC
+        if 'streams' in data and data['streams']:
+            codec_name = data['streams'][0].get('codec_name', '').lower()
+            if codec_name in ['hevc', 'h265']:
+                # Additional validation - try reading the file
+                verify_cmd = [
+                    'ffmpeg',
+                    '-v', 'error',
+                    '-i', file_path,
+                    '-t', '10',  # Only check first 10 seconds for speed
+                    '-f', 'null',
+                    '-'
+                ]
+                verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, timeout=60)
+                
+                if verify_result.returncode == 0 and not verify_result.stderr:
+                    return True
+                else:
+                    print(f"File verification failed: {verify_result.stderr}")
+                    return False
+        
+        return False
+    except subprocess.TimeoutExpired:
+        print(f"Timeout while validating file {file_path}")
+        return False
+    except Exception as e:
+        print(f"Error validating file {file_path}: {e}")
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description="Convert media files to h265")
     parser.add_argument("manifest", help="Conversion manifest file")
@@ -360,6 +505,10 @@ def main():
                         help="Print commands without executing")
     parser.add_argument("--max-files", type=int, default=0,
                         help="Maximum number of files to process (0 = all)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Show raw ffmpeg output instead of progress tracking")
+    parser.add_argument("--archive", action="store_true",
+                        help="Use higher compression settings for archival quality")
     args = parser.parse_args()
     
     # Load manifest
@@ -381,7 +530,7 @@ def main():
     fail_count = 0
     
     print(f"Starting conversion of {len(files)} files")
-    print(f"CRF: {args.crf}, Hardware: {args.hardware}, Dry Run: {args.dry_run}")
+    print(f"CRF: {args.crf}, Hardware: {args.hardware}, Dry Run: {args.dry_run}, Debug: {args.debug}, Archive: {args.archive}")
     
     for i, file_info in enumerate(files):
         print(f"\n[{i+1}/{len(files)}] Processing file")
@@ -391,7 +540,9 @@ def main():
             file_info["output_path"],
             crf=args.crf,
             use_hardware=args.hardware,
-            dry_run=args.dry_run
+            dry_run=args.dry_run,
+            debug=args.debug,
+            archive=args.archive
         )
         
         if success:

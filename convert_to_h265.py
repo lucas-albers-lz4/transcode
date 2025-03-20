@@ -37,6 +37,10 @@ def main():
                         help="Minimum free space to maintain in GB (default: 10GB)")
     parser.add_argument("--max-files", type=int, default=0,
                         help="Maximum number of files to process (0 = all, default: 0)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Show raw ffmpeg output instead of progress tracking")
+    parser.add_argument("--archive", action="store_true",
+                        help="Use higher compression settings for archival quality")
     args = parser.parse_args()
     
     # Validate input and output directories
@@ -90,6 +94,13 @@ def main():
     
     if args.max_files > 0:
         convert_cmd.extend(["--max-files", str(args.max_files)])
+    
+    # Add new options
+    if args.debug:
+        convert_cmd.append("--debug")
+    
+    if args.archive:
+        convert_cmd.append("--archive")
     
     # Run conversion
     if not run_command(convert_cmd, "Converting media files"):
