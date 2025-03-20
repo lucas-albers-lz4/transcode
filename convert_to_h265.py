@@ -51,13 +51,28 @@ def main():
         print(f"Error: Input directory not found: {input_dir}")
         return 1
     
+    # Create output directory if it doesn't exist
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        print(f"Error: Cannot create output directory (permission denied): {output_dir}")
+        return 1
+    
+    # Check if output directory is writable
+    if not os.access(output_dir, os.W_OK):
+        print(f"Error: Output directory is not writable: {output_dir}")
+        return 1
+    
+    # Get the absolute path to the script directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
     # Handle manifest generation
     manifest_path = args.manifest or "conversion_manifest.json"
     
     if not args.manifest:
         # Generate manifest by scanning
         scan_cmd = [
-            "python3", "scan_media.py",
+            "python3", os.path.join(script_dir, "scan_media.py"),
             str(input_dir),
             str(output_dir),
             "--manifest", manifest_path
@@ -71,7 +86,7 @@ def main():
     
     # Check disk space
     space_cmd = [
-        "python3", "analyze_space.py",
+        "python3", os.path.join(script_dir, "analyze_space.py"),
         manifest_path,
         "--min-free", str(args.min_free_space)
     ]
@@ -81,7 +96,7 @@ def main():
     
     # Build conversion command
     convert_cmd = [
-        "python3", "convert_media.py",
+        "python3", os.path.join(script_dir, "convert_media.py"),
         manifest_path,
         "--crf", str(args.crf)
     ]
