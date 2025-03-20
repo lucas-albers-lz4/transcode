@@ -494,6 +494,31 @@ def is_valid_hevc_file(file_path):
         print(f"Error validating file {file_path}: {e}")
         return False
 
+def check_dependencies():
+    """Check if required dependencies (ffmpeg & ffprobe) are installed."""
+    dependencies = ['ffmpeg', 'ffprobe']
+    missing = []
+    
+    for cmd in dependencies:
+        try:
+            # Use 'which' on Unix-based systems to find the command location
+            result = subprocess.run(['which', cmd], 
+                                   capture_output=True, 
+                                   text=True)
+            if result.returncode != 0:
+                missing.append(cmd)
+        except Exception:
+            missing.append(cmd)
+    
+    if missing:
+        print(f"ERROR: Missing required dependencies: {', '.join(missing)}")
+        print("Please install ffmpeg with: sudo apt install ffmpeg (Ubuntu/Debian)")
+        print("                         or: sudo dnf install ffmpeg (Fedora)")
+        print("                         or: brew install ffmpeg (macOS)")
+        return False
+    
+    return True
+
 def main():
     parser = argparse.ArgumentParser(description="Convert media files to h265")
     parser.add_argument("manifest", help="Conversion manifest file")
@@ -510,6 +535,10 @@ def main():
     parser.add_argument("--archive", action="store_true",
                         help="Use higher compression settings for archival quality")
     args = parser.parse_args()
+    
+    # Check for ffmpeg/ffprobe
+    if not check_dependencies():
+        return 1
     
     # Load manifest
     with open(args.manifest, 'r') as f:
