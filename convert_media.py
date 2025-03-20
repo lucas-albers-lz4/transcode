@@ -137,9 +137,8 @@ def convert_file(input_path: str, output_path: str,
                 has_nvenc = False
             
             if has_nvidia and has_nvenc:
-                # Use NVIDIA hardware acceleration
+                # Use NVIDIA hardware acceleration - without the problematic -hwaccel cuda
                 cmd.extend([
-                    '-hwaccel', 'cuda',  # Add this for better performance
                     '-c:v', 'hevc_nvenc',
                     '-preset', 'p4',  # Options: p1-p7 (p7=highest quality, p1=highest performance)
                     '-qp', '24',  # Quality parameter, similar to CRF
