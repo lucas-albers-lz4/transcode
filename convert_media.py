@@ -46,6 +46,10 @@ def convert_file(input_path: str, output_path: str,
     # Create in-flight file
     temp_path = f"{output_path}.transcoding"
     
+    # Get input file size
+    input_size = os.path.getsize(input_path)
+    input_size_mb = input_size / (1024 * 1024)
+    
     # Check if output file already exists and has content
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
         print(f"Output file already exists, skipping: {output_path}")
@@ -53,6 +57,17 @@ def convert_file(input_path: str, output_path: str,
     
     # Analyze input file audio streams
     audio_streams = get_audio_streams(input_path)
+    
+    # Print audio codec info
+    if audio_streams:
+        for i, stream in enumerate(audio_streams):
+            codec = stream.get('codec_name', '').lower()
+            channels = stream.get('channels', 2)
+            sample_rate = stream.get('sample_rate', '48000')
+            bitrate = int(stream.get('bit_rate', 0)) if stream.get('bit_rate', '').isdigit() else 0
+            bitrate_kb = bitrate // 1000 if bitrate > 0 else "unknown"
+            
+            print(f"Original Audio Stream {i}: {codec.upper()}, {channels}ch, {sample_rate}Hz, {bitrate_kb}kb/s")
     
     # Build ffmpeg command
     cmd = [
@@ -86,19 +101,29 @@ def convert_file(input_path: str, output_path: str,
             bitrate = int(stream.get('bit_rate', 0)) if stream.get('bit_rate', '').isdigit() else 0
             channels = int(stream.get('channels', 2))
             
-            if codec in ['aac', 'alac'] and bitrate >= 192000:
-                # High quality audio - just copy
+            # New improved audio handling logic
+            if codec == 'aac':
+                # If it's already AAC, just copy it
                 cmd.extend([
                     f'-c:a:{i}', 'copy'
                 ])
-                print(f"Audio stream {i}: Copying high-quality {codec}")
-            else:
-                # Re-encode audio
+                print(f"Audio stream {i}: Copying existing {codec} stream")
+            elif codec in ['ac3', 'dts']:
+                # Convert AC3 or DTS to AAC 192k
                 cmd.extend([
                     f'-c:a:{i}', 'aac',
                     f'-b:a:{i}', '192k',
                     f'-ac:{i}', str(min(channels, 2)),  # Limit to stereo
                     f'-ar:{i}', '48000'  # Standard sample rate
+                ])
+                print(f"Audio stream {i}: Transcoding {codec} to AAC 192k")
+            else:
+                # Handle other formats
+                cmd.extend([
+                    f'-c:a:{i}', 'aac',
+                    f'-b:a:{i}', '192k',
+                    f'-ac:{i}', str(min(channels, 2)),
+                    f'-ar:{i}', '48000'
                 ])
                 print(f"Audio stream {i}: Transcoding {codec} to AAC 192k")
     else:
@@ -130,6 +155,7 @@ def convert_file(input_path: str, output_path: str,
         
         # Run conversion
         start_time = time.time()
+        total_frames = 0
         current_process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -141,7 +167,9 @@ def convert_file(input_path: str, output_path: str,
         # Enhanced progress monitoring
         progress = 0
         last_progress_time = time.time()
-        total_duration = None  # Initialize this variable
+        total_duration = None
+        frames_encoded = 0
+        encoding_fps = 0
             
         while current_process.poll() is None:
             stdout_line = current_process.stdout.readline()
@@ -154,6 +182,17 @@ def convert_file(input_path: str, output_path: str,
                 if duration_match:
                     h, m, s = map(int, duration_match.groups())
                     total_duration = h * 3600 + m * 60 + s
+            
+            # Track frames and calculate FPS
+            if 'frame=' in stdout_line:
+                frame_match = re.search(r'frame=\s*(\d+)', stdout_line)
+                if frame_match:
+                    current_frame = int(frame_match.group(1))
+                    frames_elapsed = current_frame - frames_encoded
+                    frames_encoded = current_frame
+                    time_elapsed = time.time() - last_progress_time
+                    if time_elapsed > 0:
+                        encoding_fps = frames_elapsed / time_elapsed
             
             # Parse progress info
             if 'time=' in stdout_line:
@@ -169,7 +208,7 @@ def convert_file(input_path: str, output_path: str,
                 cpu_percent = psutil.cpu_percent()
                 memory_percent = psutil.virtual_memory().percent
                 
-                print(f"\rProgress: {progress:.1f}% | CPU: {cpu_percent}% | RAM: {memory_percent}%", 
+                print(f"\rProgress: {progress:.1f}% | FPS: {encoding_fps:.1f} | CPU: {cpu_percent}% | RAM: {memory_percent}%", 
                       end='', flush=True)
                 last_progress_time = time.time()
         
@@ -178,11 +217,19 @@ def convert_file(input_path: str, output_path: str,
         
         if current_process.returncode == 0:
             duration = time.time() - start_time
-            print(f"\nSuccess! Converted in {duration:.1f} seconds")
             
-            # Verify output
+            # Verify output and report size difference
             if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                print(f"Output file: {output_path} ({os.path.getsize(output_path)/1024/1024:.2f} MB)")
+                output_size = os.path.getsize(output_path)
+                output_size_mb = output_size / (1024 * 1024)
+                size_diff_mb = input_size_mb - output_size_mb
+                size_reduction_pct = (size_diff_mb / input_size_mb) * 100 if input_size_mb > 0 else 0
+                avg_fps = frames_encoded / duration if duration > 0 else 0
+                
+                # Single line output format for easier parsing
+                print(f"\nTime: ({duration:.1f} seconds), File Size: {output_size_mb:.2f} MB, " +
+                      f"Size Reduction: ({size_reduction_pct:.1f}%), Encode Speed: ({avg_fps:.1f} FPS)")
+                
                 return True
             else:
                 print(f"Error: Output file missing or empty: {output_path}")
