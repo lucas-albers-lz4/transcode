@@ -157,6 +157,7 @@ This document outlines the plan for adding a batch media conversion feature to c
 * ✅ **Performance Optimizations**: Eliminated unused variables and optimized memory usage
 * ✅ **Hardware Acceleration Support**: Added support for VideoToolbox on macOS
 * ✅ **Cross-Platform Hardware Support**: Added NVIDIA GPU support on Linux with fallback
+* ✅ **Enhanced Hardware Detection**: Improved detection of NVENC support in FFmpeg for better guidance
 * ✅ **Improved Error Handling**: Added cleanup for failed transcodes and better error reporting
 * ✅ **Dry Run Mode**: Added ability to preview conversion operations without executing them
 * ✅ **Signal Handling**: Added support for graceful termination with SIGINT/SIGTERM
@@ -167,6 +168,7 @@ This document outlines the plan for adding a batch media conversion feature to c
 
 * Add parallel processing for multiple simultaneous transcodes
 * Add retry logic for IO errors
+* Add detailed installation instructions for FFmpeg with NVENC support
 
 ## Design Decisions
 
@@ -177,6 +179,7 @@ This document outlines the plan for adding a batch media conversion feature to c
 * **Cross-Platform Hardware Support**: The system now supports hardware acceleration on:
   * macOS: Using VideoToolbox encoder
   * Linux: Using NVIDIA NVENC encoder with graceful fallback to software
+* **Hardware Acceleration Fallback**: The system now properly detects when FFmpeg lacks NVENC support and falls back to software encoding with helpful instructions
 * **Directory Creation and Permission Handling**: The system now properly creates output directories with error handling and validates write permissions before starting transcoding.
 
 ## Notes related to current code:
@@ -221,3 +224,42 @@ This document outlines the plan for adding a batch media conversion feature to c
   * Verify ffmpeg version supports x265
   * Check filesystem inode limits
   * Validate output directory permissions
+
+##UPCOMING WORK
+
+1. **File Permission Handling**
+   * Add verification of input file readability
+   * Generate sudo command for fixing file permissions
+   * Skip unreadable files with appropriate warnings
+
+2. **Subtitle Handling**
+   * Fix issue with subtitle streams causing encoder failures
+   * Add proper subtitle codec selection for mp4 containers
+   * Implement option to copy subtitle streams or remove them
+
+3. **Error Analysis Tool**
+   * Create a Python script to analyze conversion logs
+   * Group errors by ffmpeg exit codes
+   * Extract context for each error type
+   * Generate recommended fixes for common error patterns
+
+4. **Timestamp/DTS Issues Fix**
+   * Handle "non monotonically increasing dts" errors
+   * Add proper timestamp correction for problematic MKV files
+   * Implement -fflags +genpts option for problematic inputs
+   * Add container format compatibility checks
+
+5. **NVENC Resolution Compatibility** ✅
+   * Implement smart handling of attached images in media files
+   * Add stream-specific encoding based on resolution checks
+   * Handle attached pictures below NVENC minimum resolution
+   * Optimize encoder selection for embedded media
+   
+   **Implementation details:**
+   * Added probing of input files to identify attached pictures
+   * Implemented resolution checking against NVENC minimum requirements (256x256)
+   * Modified stream mapping to copy small image attachments instead of failing
+   * Added fallback to software encoding for specific streams when necessary
+   * Maintained hardware acceleration for main video and large attachments
+   * Added detailed logging to inform users when streams are copied due to size limitations
+   * Implemented robust error handling with graceful fallbacks
