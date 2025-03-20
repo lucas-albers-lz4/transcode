@@ -674,7 +674,16 @@ def build_ffmpeg_command(input_file, output_file, probe_result, hardware_accel=F
     Returns:
         list: FFmpeg command as a list of arguments
     """
-    command = ['ffmpeg', '-y', '-i', input_file]
+    # Check for MKV files which might need timestamp correction
+    needs_timestamp_correction = input_file.lower().endswith('.mkv')
+    
+    command = ['ffmpeg', '-y']
+    
+    # Add timestamp correction for MKV files or if we've detected timing issues
+    if needs_timestamp_correction:
+        command.extend(['-fflags', '+genpts'])
+    
+    command.extend(['-i', input_file])
     
     # Set video encoder
     if hardware_accel:
@@ -705,7 +714,7 @@ def build_ffmpeg_command(input_file, output_file, probe_result, hardware_accel=F
                     f'-ar:{i}', '48000'
                 ])
     
-    # Handle subtitle streams - either exclude them or use proper codec
+    # Handle subtitle streams
     has_subtitles = any(s.get('codec_type') == 'subtitle' for s in probe_result.get('streams', []))
     
     if has_subtitles:
@@ -721,8 +730,22 @@ def build_ffmpeg_command(input_file, output_file, probe_result, hardware_accel=F
         # If no subtitles, just map all streams
         command.extend(['-map', '0'])
     
+    # Add timestamp correction options for the output
+    # This helps with files that have timestamp issues
+    command.extend(['-vsync', 'cfr'])
+    
+    # Add output format specification based on extension
+    output_ext = os.path.splitext(output_file)[1].lower()
+    if output_ext == '.mkv':
+        command.extend(['-f', 'matroska'])
+    elif output_ext in ['.mp4', '.m4v']:
+        command.extend(['-f', 'mp4'])
+    
     # Add other encoding parameters
     command.extend(['-movflags', '+faststart'])
+    
+    # Use mapping that includes all streams
+    command.extend(['-map', '0'])
     
     # Add output file
     command.append(output_file)
