@@ -13,6 +13,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+import shlex
 
 import psutil
 import platform
@@ -224,10 +225,31 @@ def convert_file(input_path: str, output_path: str,
             '-b:a', '192k',
         ])
     
+    # Check if there are subtitle streams and handle them
+    has_subtitles = False
+    subtitle_stream_indices = []
+    
+    for i, stream in enumerate(audio_streams):
+        if stream.get('codec_type') == 'subtitle':
+            has_subtitles = True
+            subtitle_stream_indices.append(i)
+    
+    # Add subtitle handling options
+    if has_subtitles:
+        # Option 1: Skip subtitles entirely
+        # cmd.extend(['-map', '0:v', '-map', '0:a'])
+        
+        # Option 2: Copy subtitle streams for supported formats
+        for idx in subtitle_stream_indices:
+            # For mp4 output, we need to use mov_text codec
+            cmd.extend([f'-c:s:{idx}', 'mov_text'])
+    else:
+        # If no subtitles, just map all streams as before
+        cmd.extend(['-map', '0'])
+    
     # Output options
     cmd.extend([
         '-movflags', '+faststart',
-        '-map', '0',  # Copy all streams
         output_path
     ])
     
@@ -617,6 +639,96 @@ def check_dependencies():
     
     return True
 
+def verify_file_readable(file_path):
+    """
+    Verify that the file is readable by the current user.
+    
+    Args:
+        file_path: Path to the file to check
+        
+    Returns:
+        tuple: (is_readable, error_message)
+    """
+    if not os.path.exists(file_path):
+        return False, f"File does not exist: {file_path}"
+    
+    if not os.access(file_path, os.R_OK):
+        # Generate command to fix permissions
+        quoted_path = shlex.quote(file_path)
+        fix_cmd = f'sudo chmod +r {quoted_path}'
+        return False, f'ERROR reading file fix via running:\n{fix_cmd}'
+    
+    return True, None
+
+def build_ffmpeg_command(input_file, output_file, probe_result, hardware_accel=False, crf=24):
+    """
+    Build the ffmpeg command with proper handling of all stream types.
+    
+    Args:
+        input_file: Input media file path
+        output_file: Output file path
+        probe_result: FFprobe result dict
+        hardware_accel: Whether to use hardware acceleration
+        crf: Constant Rate Factor for quality
+        
+    Returns:
+        list: FFmpeg command as a list of arguments
+    """
+    command = ['ffmpeg', '-y', '-i', input_file]
+    
+    # Set video encoder
+    if hardware_accel:
+        # Platform-specific hardware acceleration
+        if sys.platform == 'darwin':
+            command.extend(['-c:v', 'hevc_videotoolbox', '-q:v', str(crf), '-tag:v', 'hvc1'])
+        else:  # Linux or other
+            command.extend(['-c:v', 'hevc_nvenc', '-preset', 'p4', '-qp', str(crf), '-tag:v', 'hvc1'])
+    else:
+        command.extend(['-c:v', 'libx265', '-crf', str(crf), '-preset', 'medium', '-tag:v', 'hvc1'])
+    
+    # Handle audio streams
+    has_audio = False
+    for i, stream in enumerate(probe_result.get('streams', [])):
+        if stream.get('codec_type') == 'audio':
+            has_audio = True
+            codec_name = stream.get('codec_name', '').lower()
+            
+            # AAC audio can be copied without re-encoding
+            if codec_name == 'aac':
+                command.extend([f'-c:a:{i}', 'copy'])
+            else:
+                # Transcode other audio formats to AAC
+                command.extend([
+                    f'-c:a:{i}', 'aac',
+                    f'-b:a:{i}', '192k',
+                    f'-ac:{i}', '2',
+                    f'-ar:{i}', '48000'
+                ])
+    
+    # Handle subtitle streams - either exclude them or use proper codec
+    has_subtitles = any(s.get('codec_type') == 'subtitle' for s in probe_result.get('streams', []))
+    
+    if has_subtitles:
+        # Option 1: Include subtitles with proper codec for MP4 container
+        for i, stream in enumerate(probe_result.get('streams', [])):
+            if stream.get('codec_type') == 'subtitle':
+                # For MP4 output, use mov_text codec
+                command.extend([f'-c:s:{i}', 'mov_text'])
+        
+        # Use -map 0 to include all streams
+        command.extend(['-map', '0'])
+    else:
+        # If no subtitles, just map all streams
+        command.extend(['-map', '0'])
+    
+    # Add other encoding parameters
+    command.extend(['-movflags', '+faststart'])
+    
+    # Add output file
+    command.append(output_file)
+    
+    return command
+
 def main():
     parser = argparse.ArgumentParser(description="Convert media files to h265")
     parser.add_argument("manifest", help="Conversion manifest file")
@@ -661,6 +773,12 @@ def main():
     
     for i, file_info in enumerate(files):
         print(f"\n[{i+1}/{len(files)}] Processing file")
+        
+        # Add file permission check before attempting to process
+        is_readable, error_msg = verify_file_readable(file_info["input_path"])
+        if not is_readable:
+            logging.error(error_msg)
+            continue
         
         success = convert_file(
             file_info["input_path"],
