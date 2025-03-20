@@ -155,7 +155,6 @@ def convert_file(input_path: str, output_path: str,
         
         # Run conversion
         start_time = time.time()
-        total_frames = 0
         current_process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
