@@ -39,7 +39,8 @@ def convert_file(input_path: str, output_path: str,
                  use_hardware: bool = False,
                  dry_run: bool = False,
                  debug: bool = False,
-                 archive: bool = False) -> bool:
+                 archive: bool = False,
+                 hw_preset: str = None) -> bool:
     """Convert a single file to h265 with proper audio handling"""
     global current_process
     
@@ -116,12 +117,24 @@ def convert_file(input_path: str, output_path: str,
         system = platform.system()
         
         if system == 'Darwin':  # macOS
+            # VideoToolbox doesn't have traditional presets, but we can adjust quality
+            # based on a preset name if we want to simulate different presets
+            vt_quality = '60'  # Default quality
+            
+            if hw_preset == "quality":
+                vt_quality = '80'  # Higher quality
+            elif hw_preset == "balanced":
+                vt_quality = '60'  # Default quality
+            elif hw_preset == "speed":
+                vt_quality = '40'  # Lower quality, faster
+                
             cmd.extend([
                 '-c:v', 'hevc_videotoolbox',
-                '-q:v', '60',
+                '-q:v', vt_quality,
                 '-tag:v', 'hvc1',
                 '-allow_sw', '1',
             ])
+            print(f"Using Apple VideoToolbox hardware acceleration with quality {vt_quality}")
         elif system == 'Linux':
             # Check for NVIDIA GPU and NVENC support
             has_nvidia = False
@@ -146,14 +159,17 @@ def convert_file(input_path: str, output_path: str,
                 has_nvenc = False
             
             if has_nvidia and has_nvenc:
-                # Use NVIDIA hardware acceleration - without the problematic -hwaccel cuda
+                # Set NVENC preset (p1-p7, default to p4 if not specified)
+                nvenc_preset = hw_preset if hw_preset in ["p1", "p2", "p3", "p4", "p5", "p6", "p7"] else "p4"
+                
+                # Use NVIDIA hardware acceleration
                 cmd.extend([
                     '-c:v', 'hevc_nvenc',
-                    '-preset', 'p4',  # Options: p1-p7 (p7=highest quality, p1=highest performance)
+                    '-preset', nvenc_preset,  # Options: p1-p7 (p7=highest quality, p1=highest performance)
                     '-qp', '24',  # Quality parameter, similar to CRF
                     '-tag:v', 'hvc1',
                 ])
-                print("Using NVIDIA hardware acceleration (NVENC) on Linux")
+                print(f"Using NVIDIA hardware acceleration (NVENC) on Linux with preset {nvenc_preset}")
             else:
                 # Fall back to software encoding
                 if has_nvidia and not has_nvenc:
@@ -824,6 +840,8 @@ def main():
                         help="Show raw ffmpeg output instead of progress tracking")
     parser.add_argument("--archive", action="store_true",
                         help="Use higher compression settings for archival quality")
+    parser.add_argument("--hw-preset", type=str, 
+                        help="Hardware encoder preset (p1-p7 for NVENC, quality/balanced/speed for VideoToolbox)")
     args = parser.parse_args()
     
     # Check for ffmpeg/ffprobe
@@ -849,7 +867,7 @@ def main():
     fail_count = 0
     
     print(f"Starting conversion of {len(files)} files")
-    print(f"CRF: {args.crf}, Hardware: {args.hardware}, Dry Run: {args.dry_run}, Debug: {args.debug}, Archive: {args.archive}")
+    print(f"CRF: {args.crf}, Hardware: {args.hardware}, Dry Run: {args.dry_run}, Debug: {args.debug}, Archive: {args.archive}, HW Preset: {args.hw_preset}")
     
     for i, file_info in enumerate(files):
         print(f"\n[{i+1}/{len(files)}] Processing file")
@@ -867,7 +885,8 @@ def main():
             use_hardware=args.hardware,
             dry_run=args.dry_run,
             debug=args.debug,
-            archive=args.archive
+            archive=args.archive,
+            hw_preset=args.hw_preset
         )
         
         if success:
