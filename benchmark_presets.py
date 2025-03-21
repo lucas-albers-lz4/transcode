@@ -678,6 +678,116 @@ def display_summary_table(results):
             print(f"* Best compression: {smallest_preset} ({smallest['encoded_size'] / (1024 * 1024):.2f}MB, "
                   f"{smallest['size_reduction']:.2f}% reduction)")
 
+def test_nvenc_parameter_space(input_file, output_dir, args):
+    """
+    Conduct an intelligent sampling of the NVENC parameter space using
+    an adaptive grid search approach.
+    """
+    results = []
+    
+    # Step 1: Test the boundaries of the parameter space
+    # This establishes our "corners" to understand the full range
+    boundary_presets = ["p4", "p7"]  # p4 is balanced, p7 is highest quality
+    boundary_cq_values = [NVENC_CQ_MIN, 35, NVENC_CQ_MAX]  # Min, middle, max
+    
+    print("\nTesting NVENC parameter space boundaries...")
+    boundary_results = []
+    
+    # Test all combinations of boundary values
+    for preset in boundary_presets:
+        for cq in boundary_cq_values:
+            print(f"\nBenchmarking boundary: {preset} with CQ {cq}...")
+            result = benchmark_preset(input_file, output_dir, "nvenc", preset, 
+                                     args.crf, cq, args.duration)
+            if result:
+                boundary_results.append(result)
+                results.append(result)
+                print(f"Completed boundary: nvenc/{preset}/CQ{cq} - "
+                      f"Time: {result['encoding_time']:.2f}s, "
+                      f"Size reduction: {result['size_reduction']:.2f}%, "
+                      f"PSNR: {result['psnr'] if result['psnr'] is not None else 'N/A'}")
+    
+    # Step 2: Analyze initial results to identify areas of interest
+    # We're looking for large gaps in either quality or compression ratio
+    threshold_quality_diff = 1.0  # dB difference in PSNR
+    threshold_size_diff = 10.0    # % difference in size reduction
+    
+    areas_of_interest = []
+    
+    # Sort results by preset and CQ
+    sorted_results = sorted(boundary_results, 
+                            key=lambda x: (x["preset"], x["nvenc_cq"]))
+    
+    # Find gaps that exceed our thresholds
+    for i in range(1, len(sorted_results)):
+        prev = sorted_results[i-1]
+        curr = sorted_results[i]
+        
+        # Only compare within the same preset
+        if prev["preset"] != curr["preset"]:
+            continue
+            
+        # Calculate differences
+        cq_gap = curr["nvenc_cq"] - prev["nvenc_cq"]
+        if cq_gap <= NVENC_CQ_STEP:
+            continue  # No gap to explore
+            
+        size_diff = abs(curr["size_reduction"] - prev["size_reduction"])
+        
+        # If we have PSNR values, check quality difference
+        quality_diff = 0
+        if prev["psnr"] is not None and curr["psnr"] is not None:
+            quality_diff = abs(curr["psnr"] - prev["psnr"])
+        
+        # If either threshold is exceeded, this is an area of interest
+        if size_diff > threshold_size_diff or quality_diff > threshold_quality_diff:
+            # Find a midpoint to test
+            mid_cq = prev["nvenc_cq"] + (cq_gap // 2)
+            areas_of_interest.append({
+                "preset": prev["preset"],
+                "cq": mid_cq,
+                "size_diff": size_diff,
+                "quality_diff": quality_diff
+            })
+    
+    # Step 3: Explore areas of interest with additional samples
+    print("\nExploring identified areas of interest...")
+    for area in areas_of_interest:
+        preset = area["preset"]
+        cq = area["cq"]
+        
+        print(f"\nBenchmarking area of interest: {preset} with CQ {cq}...")
+        result = benchmark_preset(input_file, output_dir, "nvenc", preset, 
+                                 args.crf, cq, args.duration)
+        if result:
+            results.append(result)
+            print(f"Completed area exploration: nvenc/{preset}/CQ{cq} - "
+                  f"Time: {result['encoding_time']:.2f}s, "
+                  f"Size reduction: {result['size_reduction']:.2f}%, "
+                  f"PSNR: {result['psnr'] if result['psnr'] is not None else 'N/A'}")
+    
+    # Step 4: Test p5 preset at key CQ values for comprehensive coverage
+    # p5 is the "quality" preset that's often a good middle ground
+    key_cq_values = [NVENC_CQ_MIN, 28, 35, 42, NVENC_CQ_MAX]
+    print("\nTesting p5 preset at key CQ values...")
+    
+    for cq in key_cq_values:
+        # Skip if we've already tested this combination
+        if any(r["preset"] == "p5" and r["nvenc_cq"] == cq for r in results):
+            continue
+            
+        print(f"\nBenchmarking p5 with CQ {cq}...")
+        result = benchmark_preset(input_file, output_dir, "nvenc", "p5", 
+                                 args.crf, cq, args.duration)
+        if result:
+            results.append(result)
+            print(f"Completed p5 test: nvenc/p5/CQ{cq} - "
+                  f"Time: {result['encoding_time']:.2f}s, "
+                  f"Size reduction: {result['size_reduction']:.2f}%, "
+                  f"PSNR: {result['psnr'] if result['psnr'] is not None else 'N/A'}")
+    
+    return results
+
 def main():
     parser = argparse.ArgumentParser(description='Benchmark different encoder presets for HEVC encoding')
     parser.add_argument('input_file', help='Input media file for benchmarking')
@@ -688,6 +798,8 @@ def main():
     parser.add_argument('--nvenc', action='store_true', help='Test NVIDIA NVENC presets')
     parser.add_argument('--videotoolbox', action='store_true', help='Test Apple VideoToolbox presets')
     parser.add_argument('--all', action='store_true', help='Test all available encoders')
+    parser.add_argument('--duration', type=float, default=None, help='Limit encoding to specified duration in seconds')
+    parser.add_argument('--test-nvenc-cq-range', action='store_true', help='Test NVENC CQ value range using adaptive grid search')
     parser.add_argument('--no-report', action='store_true', help='Skip generating the report')
     parser.add_argument('--duration', type=float, default=None, 
                       help='Limit encoding to the specified duration in seconds (e.g., 120 for 2 minutes)')
