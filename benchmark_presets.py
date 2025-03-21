@@ -678,11 +678,13 @@ def display_summary_table(results):
             print(f"* Best compression: {smallest_preset} ({smallest['encoded_size'] / (1024 * 1024):.2f}MB, "
                   f"{smallest['size_reduction']:.2f}% reduction)")
 
-def test_nvenc_parameter_space(input_file, output_dir, args, cq_step):
+def test_nvenc_parameter_space(input_file, output_dir, args):
     """
     Conduct an intelligent sampling of the NVENC parameter space using
     an adaptive grid search approach.
     """
+    # Use the provided CQ step size from args
+    cq_step = args.cq_step
     results = []
     
     # Step 1: Test the boundaries of the parameter space
@@ -816,9 +818,6 @@ def main():
     output_dir = create_output_dir(args.output_dir)
     print(f"Output directory: {output_dir}")
     
-    # Update the CQ step size if provided
-    NVENC_CQ_STEP = args.cq_step
-    
     # Determine which encoders to test
     encoders_to_test = []
     
@@ -855,7 +854,7 @@ def main():
     
     for encoder_type in encoders_to_test:
         if encoder_type == "nvenc" and args.test_nvenc_cq_range:
-            # Use our adaptive grid search approach instead of fixed intervals
+            # Pass args which contains cq_step
             nvenc_results = test_nvenc_parameter_space(args.input_file, output_dir, args)
             results.extend(nvenc_results)
         else:
