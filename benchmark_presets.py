@@ -30,13 +30,14 @@ from scan_media import check_hw_encoders
 # Define presets for different encoders
 PRESETS = {
     "software": ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"],
-    "nvenc": ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],  # NVIDIA presets (p1=fastest, p7=highest quality)
+    "nvenc": ["p4", "p5", "p7"],  # NVIDIA presets (p4=balanced, p5=quality, p7=highest quality)
     "videotoolbox": ["speed", "balanced", "quality"]  # VideoToolbox simulated presets using quality levels
 }
 
 # Define NVENC CQ value range
 NVENC_CQ_MIN = 23
 NVENC_CQ_MAX = 51
+NVENC_CQ_STEP = 3  # Test every 3rd value
 
 def check_nvidia_support():
     """Check if NVIDIA GPU with NVENC support is available"""
@@ -429,22 +430,41 @@ def generate_report(results, output_dir):
             
             # Create a table for this encoder
             table_data = []
-            headers = ["Preset", "Time (s)", "Size (MB)", "Reduction (%)", "PSNR (dB)"]
+            
+            # Add CQ value column for NVENC results
+            if encoder == "nvenc" and any("nvenc_cq" in result for result in group):
+                headers = ["Preset", "CQ", "Time (s)", "Size (MB)", "Reduction (%)", "PSNR (dB)"]
+            else:
+                headers = ["Preset", "Time (s)", "Size (MB)", "Reduction (%)", "PSNR (dB)"]
             
             for result in group:
                 size_mb = result["encoded_size"] / (1024 * 1024)
                 psnr = result["psnr"] if result["psnr"] is not None else "N/A"
                 
-                table_data.append([
-                    result["preset"],
-                    f"{result['encoding_time']:.2f}",
-                    f"{size_mb:.2f}",
-                    f"{result['size_reduction']:.2f}",
-                    f"{psnr:.2f}" if isinstance(psnr, float) else psnr
-                ])
+                if encoder == "nvenc" and "nvenc_cq" in result:
+                    table_data.append([
+                        result["preset"],
+                        result["nvenc_cq"],
+                        f"{result['encoding_time']:.2f}",
+                        f"{size_mb:.2f}",
+                        f"{result['size_reduction']:.2f}",
+                        f"{psnr:.2f}" if isinstance(psnr, float) else psnr
+                    ])
+                else:
+                    table_data.append([
+                        result["preset"],
+                        f"{result['encoding_time']:.2f}",
+                        f"{size_mb:.2f}",
+                        f"{result['size_reduction']:.2f}",
+                        f"{psnr:.2f}" if isinstance(psnr, float) else psnr
+                    ])
             
-            # Sort by preset if they are ordered (like p1, p2, p3, etc.)
-            if all(row[0].startswith('p') and row[0][1:].isdigit() for row in table_data):
+            # Sort results
+            if encoder == "nvenc" and any("nvenc_cq" in result for result in group):
+                # Sort NVENC results by preset then CQ value
+                table_data.sort(key=lambda row: (row[0], int(row[1])))
+            elif all(row[0].startswith('p') and row[0][1:].isdigit() for row in table_data):
+                # Sort by preset number for NVENC
                 table_data.sort(key=lambda row: int(row[0][1:]))
             
             # Write the table
@@ -468,7 +488,12 @@ def generate_report(results, output_dir):
             f.write("- **Fastest Preset:** ")
             if time_sorted:
                 fastest = time_sorted[0]
-                f.write(f"`{fastest['preset']}` ({fastest['encoding_time']:.2f}s, ")
+                preset_str = f"`{fastest['preset']}"
+                if "nvenc_cq" in fastest:
+                    preset_str += f" CQ{fastest['nvenc_cq']}"
+                preset_str += "`"
+                
+                f.write(f"{preset_str} ({fastest['encoding_time']:.2f}s, ")
                 f.write(f"{fastest['size_reduction']:.2f}% reduction")
                 if fastest['psnr'] is not None:
                     f.write(f", PSNR: {fastest['psnr']:.2f}dB")
@@ -477,7 +502,12 @@ def generate_report(results, output_dir):
             f.write("- **Best Compression:** ")
             if size_sorted:
                 best_compression = size_sorted[0]
-                f.write(f"`{best_compression['preset']}` ({best_compression['size_reduction']:.2f}% reduction, ")
+                preset_str = f"`{best_compression['preset']}"
+                if "nvenc_cq" in best_compression:
+                    preset_str += f" CQ{best_compression['nvenc_cq']}"
+                preset_str += "`"
+                
+                f.write(f"{preset_str} ({best_compression['size_reduction']:.2f}% reduction, ")
                 f.write(f"{best_compression['encoding_time']:.2f}s")
                 if best_compression['psnr'] is not None:
                     f.write(f", PSNR: {best_compression['psnr']:.2f}dB")
@@ -487,7 +517,12 @@ def generate_report(results, output_dir):
             if quality_sorted:
                 best_quality = quality_sorted[0]
                 if best_quality['psnr'] is not None:
-                    f.write(f"`{best_quality['preset']}` (PSNR: {best_quality['psnr']:.2f}dB, ")
+                    preset_str = f"`{best_quality['preset']}"
+                    if "nvenc_cq" in best_quality:
+                        preset_str += f" CQ{best_quality['nvenc_cq']}"
+                    preset_str += "`"
+                    
+                    f.write(f"{preset_str} (PSNR: {best_quality['psnr']:.2f}dB, ")
                     f.write(f"{best_quality['encoding_time']:.2f}s, ")
                     f.write(f"{best_quality['size_reduction']:.2f}% reduction)\n")
                 else:
@@ -534,7 +569,12 @@ def generate_report(results, output_dir):
                         best_balance = result
                 
                 if best_balance:
-                    f.write(f"`{best_balance['preset']}` - Balanced performance (")
+                    preset_str = f"`{best_balance['preset']}"
+                    if "nvenc_cq" in best_balance:
+                        preset_str += f" CQ{best_balance['nvenc_cq']}"
+                    preset_str += "`"
+                    
+                    f.write(f"{preset_str} - Balanced performance (")
                     f.write(f"Time: {best_balance['encoding_time']:.2f}s, ")
                     f.write(f"Reduction: {best_balance['size_reduction']:.2f}%, ")
                     if best_balance['psnr'] is not None:
@@ -580,22 +620,41 @@ def display_summary_table(results):
         print(f"\n{encoder.upper()} ENCODER SUMMARY:")
         
         table_data = []
-        headers = ["Preset", "Time (s)", "Size (MB)", "Reduction (%)", "PSNR (dB)"]
+        
+        # Add CQ value column for NVENC results
+        if encoder == "nvenc" and any("nvenc_cq" in result for result in group):
+            headers = ["Preset", "CQ", "Time (s)", "Size (MB)", "Reduction (%)", "PSNR (dB)"]
+        else:
+            headers = ["Preset", "Time (s)", "Size (MB)", "Reduction (%)", "PSNR (dB)"]
         
         for result in group:
             size_mb = result["encoded_size"] / (1024 * 1024)
             psnr = result["psnr"] if result["psnr"] is not None else "N/A"
             
-            table_data.append([
-                result["preset"],
-                f"{result['encoding_time']:.2f}",
-                f"{size_mb:.2f}",
-                f"{result['size_reduction']:.2f}",
-                f"{psnr:.2f}" if isinstance(psnr, float) else psnr
-            ])
+            if encoder == "nvenc" and "nvenc_cq" in result:
+                table_data.append([
+                    result["preset"],
+                    result["nvenc_cq"],
+                    f"{result['encoding_time']:.2f}",
+                    f"{size_mb:.2f}",
+                    f"{result['size_reduction']:.2f}",
+                    f"{psnr:.2f}" if isinstance(psnr, float) else psnr
+                ])
+            else:
+                table_data.append([
+                    result["preset"],
+                    f"{result['encoding_time']:.2f}",
+                    f"{size_mb:.2f}",
+                    f"{result['size_reduction']:.2f}",
+                    f"{psnr:.2f}" if isinstance(psnr, float) else psnr
+                ])
         
-        # Sort by preset if they are ordered (like p1, p2, p3, etc.)
-        if all(row[0].startswith('p') and row[0][1:].isdigit() for row in table_data):
+        # Sort results
+        if encoder == "nvenc" and any("nvenc_cq" in result for result in group):
+            # Sort NVENC results by preset then CQ value
+            table_data.sort(key=lambda row: (row[0], int(row[1])))
+        elif all(row[0].startswith('p') and row[0][1:].isdigit() for row in table_data):
+            # Sort by preset number for NVENC
             table_data.sort(key=lambda row: int(row[0][1:]))
         
         # Print the table using tabulate
@@ -607,8 +666,16 @@ def display_summary_table(results):
             smallest = min(group, key=lambda x: x["encoded_size"])
             
             print(f"\nQuick recommendations:")
-            print(f"* Fastest: {fastest['preset']} ({fastest['encoding_time']:.2f}s)")
-            print(f"* Best compression: {smallest['preset']} ({smallest['encoded_size'] / (1024 * 1024):.2f}MB, "
+            fastest_preset = f"{fastest['preset']}"
+            if "nvenc_cq" in fastest:
+                fastest_preset += f" CQ{fastest['nvenc_cq']}"
+            
+            smallest_preset = f"{smallest['preset']}"
+            if "nvenc_cq" in smallest:
+                smallest_preset += f" CQ{smallest['nvenc_cq']}"
+                
+            print(f"* Fastest: {fastest_preset} ({fastest['encoding_time']:.2f}s)")
+            print(f"* Best compression: {smallest_preset} ({smallest['encoded_size'] / (1024 * 1024):.2f}MB, "
                   f"{smallest['size_reduction']:.2f}% reduction)")
 
 def main():
@@ -625,7 +692,9 @@ def main():
     parser.add_argument('--duration', type=float, default=None, 
                       help='Limit encoding to the specified duration in seconds (e.g., 120 for 2 minutes)')
     parser.add_argument('--test-nvenc-cq-range', action='store_true', 
-                      help='Test NVENC encoder with CQ values ranging from 23 to 51')
+                      help='Test NVENC encoder with CQ values at intervals from 23 to 51')
+    parser.add_argument('--cq-step', type=int, default=NVENC_CQ_STEP,
+                      help='Step size for testing CQ values (default: 3)')
     args = parser.parse_args()
     
     # Check if the input file exists
@@ -636,6 +705,10 @@ def main():
     # Create output directory
     output_dir = create_output_dir(args.output_dir)
     print(f"Output directory: {output_dir}")
+    
+    # Update the CQ step size if provided
+    global NVENC_CQ_STEP
+    NVENC_CQ_STEP = args.cq_step
     
     # Determine which encoders to test
     encoders_to_test = []
@@ -673,11 +746,11 @@ def main():
     
     for encoder_type in encoders_to_test:
         if encoder_type == "nvenc" and args.test_nvenc_cq_range:
-            # Test NVENC with different CQ values on a single preset (medium or p4)
+            # Test NVENC with different CQ values on a single preset (p4)
             preset = "p4"  # Medium quality preset for NVENC
-            print(f"\nTesting NVENC CQ value range from {NVENC_CQ_MIN} to {NVENC_CQ_MAX} with preset {preset}...")
+            print(f"\nTesting NVENC CQ value range from {NVENC_CQ_MIN} to {NVENC_CQ_MAX} with step {NVENC_CQ_STEP} on preset {preset}...")
             
-            for cq_value in range(NVENC_CQ_MIN, NVENC_CQ_MAX + 1):
+            for cq_value in range(NVENC_CQ_MIN, NVENC_CQ_MAX + 1, NVENC_CQ_STEP):
                 print(f"\nBenchmarking {encoder_type} with preset {preset}, CQ {cq_value}...")
                 result = benchmark_preset(args.input_file, output_dir, encoder_type, preset, 
                                         args.crf, cq_value, args.duration)
