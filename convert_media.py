@@ -76,6 +76,14 @@ def convert_file(input_path: str, output_path: str,
     # Analyze input file audio streams
     audio_streams = get_audio_streams(input_path)
     
+    # Analyze subtitle streams
+    subtitle_streams = get_subtitle_streams(input_path)
+    if subtitle_streams:
+        print(f"Found {len(subtitle_streams)} subtitle stream(s)")
+        for i, stream in enumerate(subtitle_streams):
+            codec = stream.get('codec_name', 'unknown')
+            print(f"Subtitle Stream {stream.get('index')}: {codec}")
+    
     # Print audio codec info
     if audio_streams:
         for i, stream in enumerate(audio_streams):
@@ -225,7 +233,7 @@ def convert_file(input_path: str, output_path: str,
             '-b:a', '192k',
         ])
     
-    # Check if there are subtitle streams and handle them
+    # Handle subtitle streams
     has_subtitles = False
     subtitle_stream_indices = []
     
@@ -247,8 +255,29 @@ def convert_file(input_path: str, output_path: str,
         # If no subtitles, just map all streams as before
         cmd.extend(['-map', '0'])
     
-    # Output options
+    # Determine output container format
+    output_ext = os.path.splitext(output_path)[1].lower()
+    is_mp4_container = output_ext in ['.mp4', '.m4v']
+    
+    # Handle subtitle streams - add this before the final cmd.extend with map and output
+    for stream in subtitle_streams:
+        stream_index = stream.get('index')
+        if is_mp4_container:
+            # MP4 container only supports mov_text subtitle format
+            cmd.extend([
+                f'-c:s:{stream_index}', 'mov_text'
+            ])
+            print(f"Subtitle stream {stream_index}: Converting to mov_text for MP4 container")
+        else:
+            # For MKV, we can usually copy subtitles
+            cmd.extend([
+                f'-c:s:{stream_index}', 'copy'
+            ])
+            print(f"Subtitle stream {stream_index}: Copying for MKV container")
+    
+    # Map all streams (modify this part)
     cmd.extend([
+        '-map', '0',
         '-movflags', '+faststart',
         output_path
     ])
@@ -450,6 +479,25 @@ def get_audio_streams(filepath):
         print(f"Error analyzing audio: {e}")
         return []
         
+def get_subtitle_streams(filepath):
+    """Detect and analyze subtitle streams in the media file"""
+    try:
+        cmd = [
+            'ffprobe',
+            '-v', 'error',
+            '-select_streams', 's',
+            '-show_entries', 'stream=index,codec_name,codec_type',
+            '-of', 'json',
+            filepath
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        data = json.loads(result.stdout)
+        return data.get('streams', [])
+    except Exception as e:
+        print(f"Error analyzing subtitles: {e}")
+        return []
+
 def determine_audio_settings(audio_streams):
     """Determine appropriate audio encoding settings based on streams"""
     settings = []
