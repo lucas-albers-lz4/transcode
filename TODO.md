@@ -236,7 +236,11 @@ This document outlines the plan for adding a batch media conversion feature to c
    * Fix issue with subtitle streams causing encoder failures
    * Add proper subtitle codec selection for mp4 containers
    * Implement option to copy subtitle streams or remove them
-
+   * Explicitly set a compatible subtitle codec for MP4 containers
+   * Detect subtitle streams with a dedicated function
+   * For MP4 output files, explicitly set the subtitle codec to mov_text
+   * For other containers like MKV, copy the subtitles
+   
 3. **Error Analysis Tool**
    * Create a Python script to analyze conversion logs
    * Group errors by ffmpeg exit codes
