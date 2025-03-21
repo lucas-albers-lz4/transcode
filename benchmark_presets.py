@@ -24,9 +24,8 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(script_dir)
 sys.path.append(parent_dir)
 
-from convert_media import convert_file, get_media_info
+from convert_media import convert_file
 from scan_media import check_hw_encoders
-from media_processor import MediaProcessor  # Import our media processor class
 
 # Define presets for different encoders
 PRESETS = {
