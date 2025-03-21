@@ -798,13 +798,11 @@ def main():
     parser.add_argument('--nvenc', action='store_true', help='Test NVIDIA NVENC presets')
     parser.add_argument('--videotoolbox', action='store_true', help='Test Apple VideoToolbox presets')
     parser.add_argument('--all', action='store_true', help='Test all available encoders')
-    parser.add_argument('--duration', type=float, default=None, help='Limit encoding to specified duration in seconds')
-    parser.add_argument('--test-nvenc-cq-range', action='store_true', help='Test NVENC CQ value range using adaptive grid search')
     parser.add_argument('--no-report', action='store_true', help='Skip generating the report')
     parser.add_argument('--duration', type=float, default=None, 
                       help='Limit encoding to the specified duration in seconds (e.g., 120 for 2 minutes)')
     parser.add_argument('--test-nvenc-cq-range', action='store_true', 
-                      help='Test NVENC encoder with CQ values at intervals from 23 to 51')
+                      help='Test NVENC encoder with adaptive grid search of CQ values')
     parser.add_argument('--cq-step', type=int, default=NVENC_CQ_STEP,
                       help='Step size for testing CQ values (default: 3)')
     args = parser.parse_args()
@@ -858,38 +856,28 @@ def main():
     
     for encoder_type in encoders_to_test:
         if encoder_type == "nvenc" and args.test_nvenc_cq_range:
-            # Test NVENC with different CQ values on a single preset (p4)
-            preset = "p4"  # Medium quality preset for NVENC
-            print(f"\nTesting NVENC CQ value range from {NVENC_CQ_MIN} to {NVENC_CQ_MAX} with step {NVENC_CQ_STEP} on preset {preset}...")
-            
-            for cq_value in range(NVENC_CQ_MIN, NVENC_CQ_MAX + 1, NVENC_CQ_STEP):
-                print(f"\nBenchmarking {encoder_type} with preset {preset}, CQ {cq_value}...")
-                result = benchmark_preset(args.input_file, output_dir, encoder_type, preset, 
-                                        args.crf, cq_value, args.duration)
+            # Use our adaptive grid search approach instead of fixed intervals
+            nvenc_results = test_nvenc_parameter_space(args.input_file, output_dir, args)
+            results.extend(nvenc_results)
+        else:
+            # Standard preset testing
+            presets = PRESETS[encoder_type]
+            for preset in presets:
+                print(f"\nBenchmarking {encoder_type} with preset {preset}...")
+                
+                # Pass the appropriate quality parameter based on encoder type
+                if encoder_type == "nvenc":
+                    result = benchmark_preset(args.input_file, output_dir, encoder_type, preset, 
+                                            args.crf, args.nvenc_cq, args.duration)
+                else:
+                    result = benchmark_preset(args.input_file, output_dir, encoder_type, preset, 
+                                            args.crf, None, args.duration)
+                
                 if result:
                     results.append(result)
-                    print(f"Completed: {encoder_type}/{preset}/CQ{cq_value} - Time: {result['encoding_time']:.2f}s, "
-                        f"Size reduction: {result['size_reduction']:.2f}%, "
-                        f"PSNR: {result['psnr'] if result['psnr'] is not None else 'N/A'}")
-        
-        # Standard preset testing
-        presets = PRESETS[encoder_type]
-        for preset in presets:
-            print(f"\nBenchmarking {encoder_type} with preset {preset}...")
-            
-            # Pass the appropriate quality parameter based on encoder type
-            if encoder_type == "nvenc":
-                result = benchmark_preset(args.input_file, output_dir, encoder_type, preset, 
-                                        args.crf, args.nvenc_cq, args.duration)
-            else:
-                result = benchmark_preset(args.input_file, output_dir, encoder_type, preset, 
-                                        args.crf, None, args.duration)
-            
-            if result:
-                results.append(result)
-                print(f"Completed: {encoder_type}/{preset} - Time: {result['encoding_time']:.2f}s, "
-                      f"Size reduction: {result['size_reduction']:.2f}%, "
-                      f"PSNR: {result['psnr'] if result['psnr'] is not None else 'N/A'}")
+                    print(f"Completed: {encoder_type}/{preset} - Time: {result['encoding_time']:.2f}s, "
+                          f"Size reduction: {result['size_reduction']:.2f}%, "
+                          f"PSNR: {result['psnr'] if result['psnr'] is not None else 'N/A'}")
     
     # Save results to JSON
     save_results_to_json(results, output_dir)
