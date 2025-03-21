@@ -34,6 +34,10 @@ PRESETS = {
     "videotoolbox": ["speed", "balanced", "quality"]  # VideoToolbox simulated presets using quality levels
 }
 
+# Define NVENC CQ value range
+NVENC_CQ_MIN = 23
+NVENC_CQ_MAX = 51
+
 def check_nvidia_support():
     """Check if NVIDIA GPU with NVENC support is available"""
     has_nvidia = False
@@ -75,14 +79,22 @@ def create_output_dir(output_base):
     os.makedirs(output_dir, exist_ok=True)
     return output_dir
 
-def calculate_psnr(original, encoded):
+def calculate_psnr(original, encoded, duration=None):
     """Calculate PSNR between original and encoded video using ffmpeg"""
     try:
         # Use ffmpeg with PSNR filter to compare videos
-        cmd = [
-            'ffmpeg', '-i', original, '-i', encoded,
-            '-filter_complex', 'psnr', '-f', 'null', '-'
-        ]
+        cmd = ['ffmpeg', '-i', original]
+        
+        # Add duration limit if specified
+        if duration is not None:
+            cmd.extend(['-t', str(duration)])
+            
+        cmd.extend([
+            '-i', encoded,
+            '-filter_complex', 'psnr', 
+            '-f', 'null', '-'
+        ])
+        
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         
         # Extract PSNR value from output
@@ -109,7 +121,48 @@ def get_encoder_name(encoder_type):
         return "hevc_videotoolbox"
     return None
 
-def benchmark_preset(input_file, output_dir, encoder_type, preset, crf=23):
+def get_input_file_info(input_file):
+    """Get codec and other info about the input file"""
+    try:
+        cmd = [
+            'ffprobe', 
+            '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=codec_name,width,height,bit_rate',
+            '-of', 'json',
+            input_file
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        info = json.loads(result.stdout)
+        
+        if 'streams' in info and info['streams']:
+            return info['streams'][0]
+        return {}
+    except Exception as e:
+        print(f"Error getting file info: {e}")
+        return {}
+
+def get_video_duration(input_file):
+    """Get the duration of a video file in seconds"""
+    try:
+        cmd = [
+            'ffprobe', 
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'json',
+            input_file
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        info = json.loads(result.stdout)
+        
+        if 'format' in info and 'duration' in info['format']:
+            return float(info['format']['duration'])
+        return 0
+    except Exception as e:
+        print(f"Error getting video duration: {e}")
+        return 0
+
+def benchmark_preset(input_file, output_dir, encoder_type, preset, crf=23, nvenc_cq=None, duration=None):
     """Benchmark a specific preset for a given encoder"""
     encoder_name = get_encoder_name(encoder_type)
     if not encoder_name:
@@ -117,7 +170,8 @@ def benchmark_preset(input_file, output_dir, encoder_type, preset, crf=23):
     
     # Prepare the output filename
     base_name = os.path.splitext(os.path.basename(input_file))[0]
-    output_file = os.path.join(output_dir, f"{base_name}_{encoder_type}_{preset}.mp4")
+    suffix = f"_{nvenc_cq}" if encoder_type == "nvenc" and nvenc_cq is not None else ""
+    output_file = os.path.join(output_dir, f"{base_name}_{encoder_type}_{preset}{suffix}.mp4")
     
     # Get original file size
     original_size = os.path.getsize(input_file)
@@ -127,7 +181,7 @@ def benchmark_preset(input_file, output_dir, encoder_type, preset, crf=23):
     
     # Run the conversion using convert_file from convert_media.py
     # We need to modify this to accept preset as a parameter
-    success = run_conversion_with_preset(input_file, output_file, encoder_type, preset, crf)
+    success = run_conversion_with_preset(input_file, output_file, encoder_type, preset, crf, nvenc_cq, duration)
     
     if not success:
         print(f"Failed to convert with {encoder_type} preset {preset}")
@@ -139,12 +193,25 @@ def benchmark_preset(input_file, output_dir, encoder_type, preset, crf=23):
     
     # Get encoded file size
     encoded_size = os.path.getsize(output_file)
-    size_reduction = (1 - (encoded_size / original_size)) * 100
+    
+    # If we're only encoding a segment, estimate the full-size ratio
+    if duration is not None:
+        # Get the full duration of the original file
+        full_duration = get_video_duration(input_file)
+        if full_duration > 0:
+            # Scale the file size estimate based on the ratio of durations
+            size_ratio = full_duration / duration
+            estimated_full_size = encoded_size * size_ratio
+            size_reduction = (1 - (estimated_full_size / original_size)) * 100
+        else:
+            size_reduction = (1 - (encoded_size / original_size)) * 100
+    else:
+        size_reduction = (1 - (encoded_size / original_size)) * 100
     
     # Calculate PSNR (quality metric)
-    psnr = calculate_psnr(input_file, output_file)
+    psnr = calculate_psnr(input_file, output_file, duration)
     
-    return {
+    result = {
         "encoder": encoder_type,
         "preset": preset,
         "encoding_time": encoding_time,
@@ -154,26 +221,54 @@ def benchmark_preset(input_file, output_dir, encoder_type, preset, crf=23):
         "psnr": psnr,
         "output_file": output_file
     }
+    
+    # Add CQ value if applicable
+    if encoder_type == "nvenc" and nvenc_cq is not None:
+        result["nvenc_cq"] = nvenc_cq
+    
+    # Add duration info if limited
+    if duration is not None:
+        result["segment_duration"] = duration
+    
+    return result
 
-def run_conversion_with_preset(input_file, output_file, encoder_type, preset, crf=23):
+def run_conversion_with_preset(input_file, output_file, encoder_type, preset, crf=23, nvenc_cq=None, duration=None):
     """Run the conversion with a specific preset"""
-    # For custom preset handling, we'll use subprocess directly
-    # rather than convert_file, which doesn't have preset parameter
     try:
-        cmd = ['ffmpeg', '-y', '-i', input_file]
+        # Get info about input file
+        input_info = get_input_file_info(input_file)
+        original_codec = input_info.get('codec_name', '').lower()
+        print(f"Input file codec: {original_codec}")
+        
+        cmd = ['ffmpeg', '-y']
+        
+        # Add duration limit if specified
+        if duration is not None:
+            cmd.extend(['-t', str(duration)])
+            
+        cmd.extend(['-i', input_file])
         
         # Add encoder-specific parameters
         if encoder_type == "software":
+            # If source is already HEVC, use higher CRF for better compression
+            effective_crf = crf + 6 if original_codec == 'hevc' else crf
+            
             cmd.extend([
                 '-c:v', 'libx265',
                 '-preset', preset,
-                '-crf', str(crf)
+                '-crf', str(effective_crf)
             ])
         elif encoder_type == "nvenc":
+            # For NVENC, CQ values mean opposite of CRF (lower=higher quality)
+            # Use much higher CQ for already-HEVC content
+            effective_cq = nvenc_cq if nvenc_cq is not None else 28
+            if original_codec == 'hevc':
+                effective_cq = effective_cq + 8  # Use significantly higher CQ for re-encoding HEVC
+            
             cmd.extend([
                 '-c:v', 'hevc_nvenc',
                 '-preset', preset,
-                '-cq', str(crf)  # NVENC uses -cq instead of -crf
+                '-cq', str(effective_cq)  # Higher CQ value for better compression
             ])
         elif encoder_type == "videotoolbox":
             # VideoToolbox doesn't have presets like the others
@@ -214,16 +309,27 @@ def run_conversion_with_preset(input_file, output_file, encoder_type, preset, cr
 
 def plot_results(results, output_dir):
     """Generate plots for the benchmark results"""
-    # Group results by encoder
+    # Group results by encoder and CQ value for NVENC
     encoder_groups = {}
     for result in results:
         encoder = result["encoder"]
-        if encoder not in encoder_groups:
-            encoder_groups[encoder] = []
-        encoder_groups[encoder].append(result)
+        
+        # For NVENC with different CQ values, group separately
+        if encoder == "nvenc" and "nvenc_cq" in result:
+            group_key = f"{encoder}_cq{result['nvenc_cq']}"
+        else:
+            group_key = encoder
+            
+        if group_key not in encoder_groups:
+            encoder_groups[group_key] = []
+        encoder_groups[group_key].append(result)
     
     # Prepare data for plotting
-    for encoder, group in encoder_groups.items():
+    for group_key, group in encoder_groups.items():
+        # Extract encoder and CQ value from group_key
+        encoder = group_key.split('_')[0]
+        cq_value = group_key.split('_')[1] if '_' in group_key else "Standard"
+        
         presets = [r["preset"] for r in group]
         times = [r["encoding_time"] for r in group]
         sizes = [r["encoded_size"] / (1024 * 1024) for r in group]  # Convert to MB
@@ -267,7 +373,7 @@ def plot_results(results, output_dir):
         axs[1, 1].set_ylabel('PSNR (dB)')
         
         # Add a main title
-        fig.suptitle(f'Encoding Benchmark: {encoder}', fontsize=16)
+        fig.suptitle(f'Encoding Benchmark: {encoder} {cq_value if cq_value != "Standard" else ""}', fontsize=16)
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         
         # Save the plot
@@ -509,12 +615,17 @@ def main():
     parser = argparse.ArgumentParser(description='Benchmark different encoder presets for HEVC encoding')
     parser.add_argument('input_file', help='Input media file for benchmarking')
     parser.add_argument('--output-dir', default='./benchmark_results', help='Output directory for benchmark results')
-    parser.add_argument('--crf', type=int, default=23, help='CRF value for encoding (default: 23)')
+    parser.add_argument('--crf', type=int, default=23, help='CRF value for software encoding (default: 23)')
+    parser.add_argument('--nvenc-cq', type=int, default=28, help='CQ value for NVENC encoding (default: 28, higher=smaller files)')
     parser.add_argument('--software', action='store_true', help='Test software (libx265) presets')
     parser.add_argument('--nvenc', action='store_true', help='Test NVIDIA NVENC presets')
     parser.add_argument('--videotoolbox', action='store_true', help='Test Apple VideoToolbox presets')
     parser.add_argument('--all', action='store_true', help='Test all available encoders')
     parser.add_argument('--no-report', action='store_true', help='Skip generating the report')
+    parser.add_argument('--duration', type=float, default=None, 
+                      help='Limit encoding to the specified duration in seconds (e.g., 120 for 2 minutes)')
+    parser.add_argument('--test-nvenc-cq-range', action='store_true', 
+                      help='Test NVENC encoder with CQ values ranging from 23 to 51')
     args = parser.parse_args()
     
     # Check if the input file exists
@@ -534,9 +645,9 @@ def main():
         encoders_to_test.append("software")
     
     # Check NVIDIA support
-    if (args.nvenc or args.all) and check_nvidia_support():
+    if (args.nvenc or args.all or args.test_nvenc_cq_range) and check_nvidia_support():
         encoders_to_test.append("nvenc")
-    elif args.nvenc:
+    elif args.nvenc or args.test_nvenc_cq_range:
         print("Warning: NVIDIA NVENC not available or not supported. Skipping NVENC tests.")
     
     # Check VideoToolbox (macOS) support
@@ -546,7 +657,7 @@ def main():
         print("Warning: Apple VideoToolbox not available. Skipping VideoToolbox tests.")
     
     # If no encoders were explicitly selected, default to all available
-    if not encoders_to_test and not (args.software or args.nvenc or args.videotoolbox):
+    if not encoders_to_test and not (args.software or args.nvenc or args.videotoolbox or args.test_nvenc_cq_range):
         encoders_to_test.append("software")
         if check_nvidia_support():
             encoders_to_test.append("nvenc")
@@ -554,14 +665,41 @@ def main():
             encoders_to_test.append("videotoolbox")
     
     print(f"Testing encoders: {', '.join(encoders_to_test)}")
+    if args.duration is not None:
+        print(f"Limiting encoding to first {args.duration} seconds")
     
     # Run benchmarks
     results = []
+    
     for encoder_type in encoders_to_test:
+        if encoder_type == "nvenc" and args.test_nvenc_cq_range:
+            # Test NVENC with different CQ values on a single preset (medium or p4)
+            preset = "p4"  # Medium quality preset for NVENC
+            print(f"\nTesting NVENC CQ value range from {NVENC_CQ_MIN} to {NVENC_CQ_MAX} with preset {preset}...")
+            
+            for cq_value in range(NVENC_CQ_MIN, NVENC_CQ_MAX + 1):
+                print(f"\nBenchmarking {encoder_type} with preset {preset}, CQ {cq_value}...")
+                result = benchmark_preset(args.input_file, output_dir, encoder_type, preset, 
+                                        args.crf, cq_value, args.duration)
+                if result:
+                    results.append(result)
+                    print(f"Completed: {encoder_type}/{preset}/CQ{cq_value} - Time: {result['encoding_time']:.2f}s, "
+                        f"Size reduction: {result['size_reduction']:.2f}%, "
+                        f"PSNR: {result['psnr'] if result['psnr'] is not None else 'N/A'}")
+        
+        # Standard preset testing
         presets = PRESETS[encoder_type]
         for preset in presets:
             print(f"\nBenchmarking {encoder_type} with preset {preset}...")
-            result = benchmark_preset(args.input_file, output_dir, encoder_type, preset, args.crf)
+            
+            # Pass the appropriate quality parameter based on encoder type
+            if encoder_type == "nvenc":
+                result = benchmark_preset(args.input_file, output_dir, encoder_type, preset, 
+                                        args.crf, args.nvenc_cq, args.duration)
+            else:
+                result = benchmark_preset(args.input_file, output_dir, encoder_type, preset, 
+                                        args.crf, None, args.duration)
+            
             if result:
                 results.append(result)
                 print(f"Completed: {encoder_type}/{preset} - Time: {result['encoding_time']:.2f}s, "
