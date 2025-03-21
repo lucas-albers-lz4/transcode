@@ -30,7 +30,7 @@ from scan_media import check_hw_encoders
 # Define presets for different encoders
 PRESETS = {
     "software": ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"],
-    "nvenc": ["p4", "p5", "p7"],  # NVIDIA presets (p4=balanced, p5=quality, p7=highest quality)
+    "nvenc": ["p4", "p5", "p6", "p7"],  # NVIDIA presets (p4=balanced, p5=quality, p6=slower, p7=highest quality)
     "videotoolbox": ["speed", "balanced", "quality"]  # VideoToolbox simulated presets using quality levels
 }
 
@@ -790,6 +790,32 @@ def test_nvenc_parameter_space(input_file, output_dir, args):
     
     return results
 
+def test_nvenc_archive_presets(input_file, output_dir, args):
+    """
+    Test specific NVENC presets and CQ values for archival quality
+    """
+    results = []
+    
+    # Presets to test for archival purposes
+    archive_presets = ["p4", "p5", "p6"]
+    archive_cq_values = [26, 27, 28]
+    
+    print("\nTesting NVENC archival presets and CQ values...")
+    
+    for preset in archive_presets:
+        for cq in archive_cq_values:
+            print(f"\nBenchmarking archival setting: {preset} with CQ {cq}...")
+            result = benchmark_preset(input_file, output_dir, "nvenc", preset, 
+                                     args.crf, cq, args.duration)
+            if result:
+                results.append(result)
+                print(f"Completed archival test: nvenc/{preset}/CQ{cq} - "
+                      f"Time: {result['encoding_time']:.2f}s, "
+                      f"Size reduction: {result['size_reduction']:.2f}%, "
+                      f"PSNR: {result['psnr'] if result['psnr'] is not None else 'N/A'}")
+    
+    return results
+
 def main():
     parser = argparse.ArgumentParser(description='Benchmark different encoder presets for HEVC encoding')
     parser.add_argument('input_file', help='Input media file for benchmarking')
@@ -807,6 +833,8 @@ def main():
                       help='Test NVENC encoder with adaptive grid search of CQ values')
     parser.add_argument('--cq-step', type=int, default=NVENC_CQ_STEP,
                       help='Step size for testing CQ values (default: 3)')
+    parser.add_argument('--test-archive-settings', action='store_true',
+                      help='Test specific NVENC preset/CQ combinations for archival quality (p4/p5/p6 with CQ 26/27/28)')
     args = parser.parse_args()
     
     # Check if the input file exists
@@ -876,6 +904,12 @@ def main():
                     print(f"Completed: {encoder_type}/{preset} - Time: {result['encoding_time']:.2f}s, "
                           f"Size reduction: {result['size_reduction']:.2f}%, "
                           f"PSNR: {result['psnr'] if result['psnr'] is not None else 'N/A'}")
+    
+    # Add a new section to test archive-specific settings
+    if args.test_archive_settings and check_nvidia_support():
+        print("\nRunning archival quality benchmark for NVENC...")
+        archive_results = test_nvenc_archive_presets(args.input_file, output_dir, args)
+        results.extend(archive_results)
     
     # Save results to JSON
     save_results_to_json(results, output_dir)

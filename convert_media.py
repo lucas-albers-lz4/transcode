@@ -162,14 +162,27 @@ def convert_file(input_path: str, output_path: str,
                 # Set NVENC preset (p1-p7, default to p4 if not specified)
                 nvenc_preset = hw_preset if hw_preset in ["p1", "p2", "p3", "p4", "p5", "p6", "p7"] else "p4"
                 
-                # Use NVIDIA hardware acceleration
-                cmd.extend([
-                    '-c:v', 'hevc_nvenc',
-                    '-preset', nvenc_preset,  # Options: p1-p7 (p7=highest quality, p1=highest performance)
-                    '-qp', '24',  # Quality parameter, similar to CRF
-                    '-tag:v', 'hvc1',
-                ])
-                print(f"Using NVIDIA hardware acceleration (NVENC) on Linux with preset {nvenc_preset}")
+                # For archive mode, use higher quality settings
+                if archive:
+                    # These values will be determined by your benchmark results
+                    nvenc_preset = "p5"  # Adjust based on benchmark results
+                    nvenc_cq = 27       # Adjust based on benchmark results
+                    cmd.extend([
+                        '-c:v', 'hevc_nvenc',
+                        '-preset', nvenc_preset,
+                        '-cq', str(nvenc_cq),
+                        '-tag:v', 'hvc1',
+                    ])
+                    print(f"Using NVIDIA hardware acceleration (NVENC) on Linux with archive settings: preset {nvenc_preset}, CQ {nvenc_cq}")
+                else:
+                    # Regular (non-archive) encoding
+                    cmd.extend([
+                        '-c:v', 'hevc_nvenc',
+                        '-preset', nvenc_preset,
+                        '-cq', '28',     # Default quality, use CQ instead of QP
+                        '-tag:v', 'hvc1',
+                    ])
+                    print(f"Using NVIDIA hardware acceleration (NVENC) on Linux with preset {nvenc_preset}")
             else:
                 # Fall back to software encoding
                 if has_nvidia and not has_nvenc:
@@ -764,7 +777,11 @@ def build_ffmpeg_command(input_file, output_file, probe_result, hardware_accel=F
         if sys.platform == 'darwin':
             command.extend(['-c:v', 'hevc_videotoolbox', '-q:v', str(crf), '-tag:v', 'hvc1'])
         else:  # Linux or other
-            command.extend(['-c:v', 'hevc_nvenc', '-preset', 'p4', '-qp', str(crf), '-tag:v', 'hvc1'])
+            if archive:
+                # Archival quality settings (adjust after benchmarking)
+                command.extend(['-c:v', 'hevc_nvenc', '-preset', 'p5', '-cq', '27', '-tag:v', 'hvc1'])
+            else:
+                command.extend(['-c:v', 'hevc_nvenc', '-preset', 'p4', '-cq', str(crf), '-tag:v', 'hvc1'])
     else:
         command.extend(['-c:v', 'libx265', '-crf', str(crf), '-preset', 'medium', '-tag:v', 'hvc1'])
     
