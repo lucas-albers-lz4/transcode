@@ -30,7 +30,9 @@ from scan_media import check_hw_encoders
 # Define presets for different encoders
 PRESETS = {
     "software": ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"],
-    "nvenc": ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],  # Full range of NVIDIA presets
+    "nvenc": ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],  # NVIDIA HEVC presets
+    "nvenc_h264": ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],  # NVIDIA H.264 presets
+    "nvenc_av1": ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],  # NVIDIA AV1 presets
     "videotoolbox": ["speed", "balanced", "quality"],  # VideoToolbox simulated presets
     "av1_software": ["0", "1", "2", "4", "6", "8"],  # libaom-av1 CPU usage presets
     "av1_svt": ["1", "3", "5", "7", "8", "10", "12"]  # SVT-AV1 presets
@@ -45,6 +47,8 @@ def check_nvidia_support():
     """Check if NVIDIA GPU with NVENC support is available"""
     has_nvidia = False
     has_nvenc = False
+    has_nvenc_h264 = False
+    has_nvenc_av1 = False
     
     try:
         # Check if nvidia-smi command exists and returns successfully
@@ -59,12 +63,21 @@ def check_nvidia_support():
             nvenc_check = subprocess.run(['ffmpeg', '-encoders'], 
                                         capture_output=True, 
                                         text=True)
-            has_nvenc = 'hevc_nvenc' in nvenc_check.stdout
+            output = nvenc_check.stdout
+            has_nvenc = 'hevc_nvenc' in output
+            has_nvenc_h264 = 'h264_nvenc' in output
+            has_nvenc_av1 = 'av1_nvenc' in output
     except:
         has_nvidia = False
         has_nvenc = False
+        has_nvenc_h264 = False
+        has_nvenc_av1 = False
     
-    return has_nvidia and has_nvenc
+    return {
+        'nvenc': has_nvenc,
+        'nvenc_h264': has_nvenc_h264,
+        'nvenc_av1': has_nvenc_av1
+    }
 
 def check_macos_support():
     """Check if running on macOS and VideoToolbox is available"""
@@ -153,6 +166,8 @@ def get_encoder_name(encoder_type):
     encoder_map = {
         "software": "libx265",
         "nvenc": "hevc_nvenc",
+        "nvenc_h264": "h264_nvenc",
+        "nvenc_av1": "av1_nvenc",
         "videotoolbox": "hevc_videotoolbox",
         "av1_software": "libaom-av1",
         "av1_svt": "libsvtav1"
@@ -287,9 +302,23 @@ def run_conversion_with_preset(input_file, output_file, encoder_type, preset, qu
                 '-crf', str(quality_value)
             ])
         elif encoder_type == "nvenc":
-            # NVIDIA hardware encoding
+            # NVIDIA hardware encoding for HEVC
             cmd.extend([
                 '-c:v', 'hevc_nvenc',
+                '-preset', preset,
+                '-cq', str(quality_value)
+            ])
+        elif encoder_type == "nvenc_h264":
+            # NVIDIA hardware encoding for H.264
+            cmd.extend([
+                '-c:v', 'h264_nvenc',
+                '-preset', preset,
+                '-cq', str(quality_value)
+            ])
+        elif encoder_type == "nvenc_av1":
+            # NVIDIA hardware encoding for AV1
+            cmd.extend([
+                '-c:v', 'av1_nvenc',
                 '-preset', preset,
                 '-cq', str(quality_value)
             ])
@@ -905,11 +934,12 @@ def main():
     # Encoder selection
     encoder_group = parser.add_argument_group('Encoder Selection')
     encoder_group.add_argument('--encoders', type=str, nargs='+',
-                             choices=['software', 'nvenc', 'videotoolbox', 'av1_software', 'av1_svt', 'all'],
+                             choices=['software', 'nvenc', 'nvenc_h264', 'nvenc_av1', 'videotoolbox', 
+                                      'av1_software', 'av1_svt', 'all', 'nvenc_all'],
                              default=['software'],
-                             help='Encoders to test (default: software)')
+                             help='Encoders to test (default: software, nvenc_all=all NVIDIA encoders)')
     encoder_group.add_argument('--hardware-only', action='store_true',
-                            help='Only test hardware encoders (nvenc, videotoolbox)')
+                            help='Only test hardware encoders (nvenc, nvenc_h264, nvenc_av1, videotoolbox)')
     
     # Quality settings
     quality_group = parser.add_argument_group('Quality Settings')
@@ -944,20 +974,36 @@ def main():
     
     # If hardware-only is set, only test hardware encoders
     if args.hardware_only:
-        args.encoders = ['nvenc', 'videotoolbox']
+        args.encoders = ['nvenc', 'nvenc_h264', 'nvenc_av1', 'videotoolbox']
         print("Hardware-only mode enabled. Testing only hardware encoders.")
     # Check if we need to test all encoders
     elif 'all' in args.encoders:
-        args.encoders = ['software', 'nvenc', 'videotoolbox', 'av1_software', 'av1_svt']
+        args.encoders = ['software', 'nvenc', 'nvenc_h264', 'nvenc_av1', 'videotoolbox', 'av1_software', 'av1_svt']
+    elif 'nvenc_all' in args.encoders:
+        # Replace nvenc_all with all NVIDIA encoders
+        args.encoders.remove('nvenc_all')
+        args.encoders.extend(['nvenc', 'nvenc_h264', 'nvenc_av1'])
     
     # Verify hardware encoders are available
     verified_encoders = []
+    nvidia_support = check_nvidia_support()
+    
     for encoder in args.encoders:
         if encoder == 'nvenc':
-            if check_nvidia_support():
+            if nvidia_support['nvenc']:
                 verified_encoders.append(encoder)
             else:
-                print("NVIDIA NVENC not available. Skipping.")
+                print("NVIDIA HEVC NVENC not available. Skipping.")
+        elif encoder == 'nvenc_h264':
+            if nvidia_support['nvenc_h264']:
+                verified_encoders.append(encoder)
+            else:
+                print("NVIDIA H.264 NVENC not available. Skipping.")
+        elif encoder == 'nvenc_av1':
+            if nvidia_support['nvenc_av1']:
+                verified_encoders.append(encoder)
+            else:
+                print("NVIDIA AV1 NVENC not available. Skipping.")
         elif encoder == 'videotoolbox':
             if check_macos_support():
                 verified_encoders.append(encoder)
