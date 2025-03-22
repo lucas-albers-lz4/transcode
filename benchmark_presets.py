@@ -816,6 +816,33 @@ def test_nvenc_archive_presets(input_file, output_dir, args):
     
     return results
 
+def test_nvenc_cq_values(input_file, output_dir, args):
+    """Test a range of CQ values for a limited set of presets to find optimal compression point"""
+    results = []
+    
+    # Focus on presets p4 and p5 which showed good performance
+    test_presets = ["p4", "p5"]
+    
+    # Test a wider range of CQ values focusing on greater compression
+    # Start with higher quality and move toward more compression
+    cq_values = [26, 28, 30, 32, 34, 36]
+    
+    print("\nTesting NVENC CQ values for compression benefits...")
+    
+    for preset in test_presets:
+        for cq in cq_values:
+            print(f"\nBenchmarking compression setting: {preset} with CQ {cq}...")
+            result = benchmark_preset(input_file, output_dir, "nvenc", preset, 
+                                    args.crf, cq, args.duration)
+            if result:
+                results.append(result)
+                print(f"Completed test: nvenc/{preset}/CQ{cq} - "
+                      f"Time: {result['encoding_time']:.2f}s, "
+                      f"Size reduction: {result['size_reduction']:.2f}%, "
+                      f"PSNR: {result['psnr'] if result['psnr'] is not None else 'N/A'}")
+    
+    return results
+
 def main():
     parser = argparse.ArgumentParser(description='Benchmark different encoder presets for HEVC encoding')
     parser.add_argument('input_file', help='Input media file for benchmarking')
@@ -835,6 +862,8 @@ def main():
                       help='Step size for testing CQ values (default: 3)')
     parser.add_argument('--test-archive-settings', action='store_true',
                       help='Test specific NVENC preset/CQ combinations for archival quality (p4/p5/p6 with CQ 26/27/28)')
+    parser.add_argument('--test-nvenc-cq-values', action='store_true',
+                      help='Test a wide range of CQ values (26-36) with p4 and p5 presets')
     args = parser.parse_args()
     
     # Check if the input file exists
@@ -885,6 +914,10 @@ def main():
             # Pass args which contains cq_step
             nvenc_results = test_nvenc_parameter_space(args.input_file, output_dir, args)
             results.extend(nvenc_results)
+        elif encoder_type == "nvenc" and args.test_nvenc_cq_values:
+            print("\nRunning CQ value compression test for NVENC...")
+            cq_results = test_nvenc_cq_values(args.input_file, output_dir, args)
+            results.extend(cq_results)
         else:
             # Standard preset testing
             presets = PRESETS[encoder_type]
