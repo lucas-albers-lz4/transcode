@@ -49,30 +49,31 @@ def check_nvidia_support():
     has_nvenc = False
     has_nvenc_h264 = False
     has_nvenc_av1 = False
-    
+
     try:
         # Check if nvidia-smi command exists and returns successfully
-        nvidia_check = subprocess.run(['nvidia-smi'], 
-                                    stdout=subprocess.DEVNULL, 
-                                    stderr=subprocess.DEVNULL, 
+        nvidia_check = subprocess.run(['nvidia-smi'],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL,
                                     check=False)
         has_nvidia = nvidia_check.returncode == 0
-        
+
         # Check if ffmpeg has nvenc support
         if has_nvidia:
-            nvenc_check = subprocess.run(['ffmpeg', '-encoders'], 
-                                        capture_output=True, 
-                                        text=True)
+            nvenc_check = subprocess.run(['ffmpeg', '-encoders'],
+                                        capture_output=True,
+                                        text=True,  # This is important!
+                                        check=False) # and check=False is also important
             output = nvenc_check.stdout
             has_nvenc = 'hevc_nvenc' in output
             has_nvenc_h264 = 'h264_nvenc' in output
             has_nvenc_av1 = 'av1_nvenc' in output
-    except:
+    except Exception: # Catch *all* exceptions, including FileNotFoundError
         has_nvidia = False
         has_nvenc = False
         has_nvenc_h264 = False
         has_nvenc_av1 = False
-    
+
     return {
         'nvenc': has_nvenc,
         'nvenc_h264': has_nvenc_h264,
