@@ -924,6 +924,55 @@ def check_encoder_available(encoder_name):
     except:
         return False
 
+def debug_nvidia_support():
+    """Debug function to check NVIDIA NVENC support"""
+    try:
+        # Check if nvidia-smi command exists and returns successfully
+        print("Checking if NVIDIA GPU is available...")
+        try:
+            nvidia_check = subprocess.run(['nvidia-smi'], 
+                                       stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, 
+                                       text=True,
+                                       check=False)
+            has_nvidia = nvidia_check.returncode == 0
+            print(f"nvidia-smi returncode: {nvidia_check.returncode}")
+            print(f"NVIDIA GPU available: {has_nvidia}")
+        except Exception as e:
+            print(f"Error checking NVIDIA GPU: {e}")
+            has_nvidia = False
+        
+        # Check if ffmpeg has nvenc support
+        if has_nvidia:
+            print("\nChecking FFmpeg for NVENC encoders...")
+            try:
+                nvenc_check = subprocess.run(['ffmpeg', '-encoders'], 
+                                           capture_output=True, 
+                                           text=True,
+                                           check=False)
+                
+                print(f"FFmpeg encoders command succeeded: {nvenc_check.returncode == 0}")
+                
+                output = nvenc_check.stdout
+                has_nvenc = 'hevc_nvenc' in output
+                has_nvenc_h264 = 'h264_nvenc' in output
+                has_nvenc_av1 = 'av1_nvenc' in output
+                
+                print(f"Found hevc_nvenc: {has_nvenc}")
+                print(f"Found h264_nvenc: {has_nvenc_h264}")
+                print(f"Found av1_nvenc: {has_nvenc_av1}")
+                
+                # Print matching lines for verification
+                print("\nMatching encoder lines:")
+                for line in output.splitlines():
+                    if 'nvenc' in line:
+                        print(f"  {line.strip()}")
+            except Exception as e:
+                print(f"Error checking NVENC support: {e}")
+                has_nvenc = has_nvenc_h264 = has_nvenc_av1 = False
+    except Exception as e:
+        print(f"Overall error in debug_nvidia_support: {e}")
+
 def main():
     parser = argparse.ArgumentParser(description='Benchmark different encoder presets')
     parser.add_argument('input_file', help='Input media file for benchmarking')
@@ -939,7 +988,7 @@ def main():
                                       'av1_software', 'av1_svt', 'all', 'nvenc_all'],
                              default=['software'],
                              help='Encoders to test (default: software, nvenc_all=all NVIDIA encoders)')
-    encoder_group.add_argument('--hardware-only', action='store_true',
+    encoder_group.add_argument('--hardware-only', '--hardware', action='store_true',
                             help='Only test hardware encoders (nvenc, nvenc_h264, nvenc_av1, videotoolbox)')
     
     # Quality settings
