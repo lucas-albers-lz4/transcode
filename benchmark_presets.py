@@ -30,9 +30,9 @@ from scan_media import check_hw_encoders
 # Define presets for different encoders
 PRESETS = {
     "software": ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"],
-    "nvenc": ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],  # NVIDIA HEVC presets
-    "nvenc_h264": ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],  # NVIDIA H.264 presets
-    "nvenc_av1": ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],  # NVIDIA AV1 presets
+    "nvenc": ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],       # NVENC (HEVC) presets
+    "nvenc_h264": ["slow", "medium", "fast", "hp", "hq", "bd", "ll", "llhq", "llhp"],  # NVENC H.264 presets
+    "nvenc_av1": ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],      # NVENC AV1 presets
     "videotoolbox": ["speed", "balanced", "quality"],  # VideoToolbox simulated presets
     "av1_software": ["0", "1", "2", "4", "6", "8"],  # libaom-av1 CPU usage presets
     "av1_svt": ["1", "3", "5", "7", "8", "10", "12"]  # SVT-AV1 presets
@@ -1035,10 +1035,16 @@ def main():
     encoder_presets = {}
     for encoder in args.encoders:
         if args.custom_presets and args.presets:
+            # Use custom presets if provided
             encoder_presets[encoder] = args.presets
         else:
-            encoder_presets[encoder] = PRESETS[encoder]
-        
+            # Use the correct presets from the PRESETS dictionary
+            if encoder in PRESETS:
+                encoder_presets[encoder] = PRESETS[encoder]
+            else:
+                print(f"Warning: No presets defined for encoder '{encoder}'. Skipping.")
+                continue  # Skip this encoder
+
         print(f"Testing {encoder} with presets: {', '.join(encoder_presets[encoder])}")
     
     # Run benchmarks
@@ -1046,6 +1052,9 @@ def main():
     
     # For each encoder, test all combinations of presets and quality values
     for encoder in args.encoders:
+        if encoder not in encoder_presets:
+            continue # Skip if no presets were found
+
         for preset in encoder_presets[encoder]:
             for quality in args.quality_values:
                 print(f"\nBenchmarking {encoder} with preset {preset} and quality {quality}...")
