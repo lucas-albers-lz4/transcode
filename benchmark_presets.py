@@ -700,7 +700,7 @@ def display_summary_table(results):
             
             print(f"* Fastest: {fastest['preset']} quality={fastest['quality_value']} ({fastest['encoding_time']:.2f}s)")
             print(f"* Best compression: {smallest['preset']} quality={smallest['quality_value']} ({smallest['size_reduction']:.2f}% reduction)")
-            ])
+            
         
         # Sort results by preset then quality
         table_data.sort(key=lambda row: (row[0], row[1]))
