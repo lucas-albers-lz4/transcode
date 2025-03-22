@@ -908,6 +908,8 @@ def main():
                              choices=['software', 'nvenc', 'videotoolbox', 'av1_software', 'av1_svt', 'all'],
                              default=['software'],
                              help='Encoders to test (default: software)')
+    encoder_group.add_argument('--hardware-only', action='store_true',
+                            help='Only test hardware encoders (nvenc, videotoolbox)')
     
     # Quality settings
     quality_group = parser.add_argument_group('Quality Settings')
@@ -940,8 +942,12 @@ def main():
     output_dir = create_output_dir(args.output_dir)
     print(f"Output directory: {output_dir}")
     
+    # If hardware-only is set, only test hardware encoders
+    if args.hardware_only:
+        args.encoders = ['nvenc', 'videotoolbox']
+        print("Hardware-only mode enabled. Testing only hardware encoders.")
     # Check if we need to test all encoders
-    if 'all' in args.encoders:
+    elif 'all' in args.encoders:
         args.encoders = ['software', 'nvenc', 'videotoolbox', 'av1_software', 'av1_svt']
     
     # Verify hardware encoders are available
