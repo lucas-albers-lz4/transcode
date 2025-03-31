@@ -1,6 +1,6 @@
 # H.265 (HEVC) Batch Media Transcoder
 
-A lightweight, intelligent media transcoding utility designed to batch convert your media files to H.265/HEVC format. This tool is optimized for space efficiency while maintaining quality, and provides a simple yet powerful interface for handling complex transcoding scenarios.
+Batch convert your media files to H.265/HEVC format. 
 
 ## Features
 
