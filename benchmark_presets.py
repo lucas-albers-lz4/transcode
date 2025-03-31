@@ -128,8 +128,40 @@ def calculate_psnr(original, encoded, duration=None):
         print(f"Error calculating PSNR: {e}")
         return None
 
+def check_vmaf_support():
+    """Check if ffmpeg supports libvmaf filter"""
+    try:
+        # Check if libvmaf is available in ffmpeg
+        result = subprocess.run(
+            ['ffmpeg', '-filters'],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        
+        # Look for libvmaf in the filters list
+        for line in result.stdout.splitlines():
+            if 'libvmaf' in line:
+                return True
+        
+        return False
+    except Exception:
+        return False
+
 def calculate_vmaf(original, encoded, duration=None):
     """Calculate VMAF score between original and encoded video using ffmpeg with libvmaf"""
+    
+    # First check if ffmpeg supports libvmaf
+    if not hasattr(calculate_vmaf, 'has_vmaf_support'):
+        calculate_vmaf.has_vmaf_support = check_vmaf_support()
+        
+        if not calculate_vmaf.has_vmaf_support:
+            print("Warning: libvmaf is not supported by your ffmpeg installation. VMAF scores will not be calculated.")
+    
+    # Skip VMAF calculation if not supported
+    if not calculate_vmaf.has_vmaf_support:
+        return None
+    
     try:
         # Use ffmpeg with libvmaf filter to compare videos
         cmd = ['ffmpeg', '-i', original]
