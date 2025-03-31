@@ -143,7 +143,7 @@ If you encounter permission errors, first run with `--dry-run` to identify probl
 
 If hardware acceleration fails:
 - For macOS: Ensure FFmpeg is built with VideoToolbox support
-- For Linux: Verify NVIDIA drivers and FFmpeg with NVENC support are installed
+- For Linux: Verify FFmpeg is compiled with  NVENC support
 
 ### Resuming Interrupted Conversion
 
