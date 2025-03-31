@@ -78,6 +78,10 @@ def main():
             "--manifest", manifest_path
         ]
         
+        # Add permission checking when in dry-run mode
+        if args.dry_run:
+            scan_cmd.append("--check-permissions")
+        
         if not run_command(scan_cmd, "Scanning media files"):
             return 1
     elif not os.path.exists(manifest_path):

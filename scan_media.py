@@ -6,6 +6,7 @@ Outputs a JSON manifest of files to be processed.
 import argparse
 import json
 import subprocess
+import os
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -94,14 +95,27 @@ def get_media_info(filepath: Path) -> dict:
         print(f"Error getting media info for {filepath}: {e}")
         return info
 
-def find_media_files(input_dir: Path, output_dir: Path) -> List[Dict[str, Any]]:
+def is_readable(filepath: Path) -> bool:
+    """Check if file is readable."""
+    try:
+        return os.access(filepath, os.R_OK)
+    except Exception:
+        return False
+
+def find_media_files(input_dir: Path, output_dir: Path, check_permissions: bool = False) -> List[Dict[str, Any]]:
     """
     Find all media files recursively that need conversion.
     
+    Args:
+        input_dir: Directory to scan
+        output_dir: Directory for output files
+        check_permissions: If True, check if files are readable
+        
     Returns:
         List of dicts with file info
     """
     to_convert = []
+    unreadable_files = []
     
     for filepath in input_dir.rglob("*"):
         if not filepath.is_file() or not is_media_file(filepath):
@@ -110,6 +124,12 @@ def find_media_files(input_dir: Path, output_dir: Path) -> List[Dict[str, Any]]:
         rel_path = filepath.relative_to(input_dir)
         output_path = output_dir / rel_path
         
+        # Check if file is readable when check_permissions is True
+        if check_permissions and not is_readable(filepath):
+            unreadable_files.append(str(rel_path))
+            print(f"Warning: Cannot read file (permission denied): {rel_path}")
+            continue
+            
         # Skip already h265 files
         if is_h265_encoded(filepath):
             print(f"Skipping h265 file: {rel_path}")
@@ -143,6 +163,13 @@ def find_media_files(input_dir: Path, output_dir: Path) -> List[Dict[str, Any]]:
         
         print(f"Found: {rel_path} ({file_info['video_codec']}/{file_info['audio_codec']}, {file_info['resolution']})")
         to_convert.append(file_info)
+    
+    # Report unreadable files if any were found
+    if unreadable_files and check_permissions:
+        print(f"\nWarning: Found {len(unreadable_files)} unreadable files:")
+        for file in unreadable_files:
+            print(f"  - {file}")
+        print("\nYou may need to fix permissions before proceeding.")
     
     return to_convert
 
@@ -197,6 +224,8 @@ def main():
     parser.add_argument("output_dir", help="Output directory for converted files")
     parser.add_argument("--manifest", default="conversion_manifest.json", 
                         help="Output manifest file")
+    parser.add_argument("--check-permissions", action="store_true",
+                        help="Check if source files are readable")
     args = parser.parse_args()
     
     # Check for ffmpeg/ffprobe
@@ -215,7 +244,7 @@ def main():
     
     # Scan for files
     print(f"Scanning directory: {input_dir}")
-    files = find_media_files(input_dir, output_dir)
+    files = find_media_files(input_dir, output_dir, args.check_permissions)
     
     # Calculate total size
     total_size_bytes = sum(f["size"] for f in files)
