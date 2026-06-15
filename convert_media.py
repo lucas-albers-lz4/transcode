@@ -7,9 +7,11 @@ import json
 import logging
 import os
 import re
+import select
 import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -27,7 +29,33 @@ def signal_handler(signum, frame):
     if current_process:
         print("Terminating current conversion process...")
         current_process.terminate()
+        try:
+            current_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            print("Process didn't terminate gracefully, forcing...")
+            current_process.kill()
     sys.exit(1)
+
+def _start_stderr_drain(process):
+    """Drain stderr in a background thread to prevent pipe deadlocks."""
+    stderr_lines = []
+
+    def _drain():
+        if process.stderr:
+            for line in process.stderr:
+                stderr_lines.append(line)
+
+    thread = threading.Thread(target=_drain, daemon=True)
+    thread.start()
+    return stderr_lines, thread
+
+def _path_within_root(path: Path, root: Path) -> bool:
+    """Return True when path resolves inside root."""
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 def setup_signal_handlers():
     """Set up signal handlers for graceful termination"""
@@ -154,7 +182,7 @@ def convert_file(input_path: str, output_path: str,
                                                 capture_output=True, 
                                                 text=True)
                     has_nvenc = 'hevc_nvenc' in nvenc_check.stdout
-            except:
+            except (subprocess.CalledProcessError, FileNotFoundError, OSError):
                 has_nvidia = False
                 has_nvenc = False
             
@@ -262,49 +290,21 @@ def convert_file(input_path: str, output_path: str,
             '-b:a', '192k',
         ])
     
-    # Handle subtitle streams
-    has_subtitles = False
-    subtitle_stream_indices = []
-    
-    for i, stream in enumerate(audio_streams):
-        if stream.get('codec_type') == 'subtitle':
-            has_subtitles = True
-            subtitle_stream_indices.append(i)
-    
-    # Add subtitle handling options
-    if has_subtitles:
-        # Option 1: Skip subtitles entirely
-        # cmd.extend(['-map', '0:v', '-map', '0:a'])
-        
-        # Option 2: Copy subtitle streams for supported formats
-        for idx in subtitle_stream_indices:
-            # For mp4 output, we need to use mov_text codec
-            cmd.extend([f'-c:s:{idx}', 'mov_text'])
-    else:
-        # If no subtitles, just map all streams as before
-        cmd.extend(['-map', '0'])
-    
-    # Determine output container format
+    # Handle subtitle streams using output subtitle indices
     output_ext = os.path.splitext(output_path)[1].lower()
     is_mp4_container = output_ext in ['.mp4', '.m4v']
-    
-    # Handle subtitle streams - add this before the final cmd.extend with map and output
-    for stream in subtitle_streams:
-        stream_index = stream.get('index')
+
+    for sub_i, stream in enumerate(subtitle_streams):
         if is_mp4_container:
-            # MP4 container only supports mov_text subtitle format
-            cmd.extend([
-                f'-c:s:{stream_index}', 'mov_text'
-            ])
-            print(f"Subtitle stream {stream_index}: Converting to mov_text for MP4 container")
+            cmd.extend([f'-c:s:{sub_i}', 'mov_text'])
+            print(
+                f"Subtitle stream {stream.get('index')}: "
+                f"Converting to mov_text for MP4 container"
+            )
         else:
-            # For MKV, we can usually copy subtitles
-            cmd.extend([
-                f'-c:s:{stream_index}', 'copy'
-            ])
-            print(f"Subtitle stream {stream_index}: Copying for MKV container")
-    
-    # Map all streams (modify this part)
+            cmd.extend([f'-c:s:{sub_i}', 'copy'])
+            print(f"Subtitle stream {stream.get('index')}: Copying for MKV container")
+
     cmd.extend([
         '-map', '0',
         '-movflags', '+faststart',
@@ -346,7 +346,10 @@ def convert_file(input_path: str, output_path: str,
                     # Basic output information since we don't have frame stats
                     print(f"\nTime: ({duration:.1f} seconds), File Size: {output_size_mb:.2f} MB, " +
                           f"Size Reduction: ({size_reduction_pct:.1f}%)")
-                    
+
+                    if not verify_output_file(output_path):
+                        return False
+
                     return True
                 else:
                     print(f"Error: Output file missing or empty: {output_path}")
@@ -363,7 +366,8 @@ def convert_file(input_path: str, output_path: str,
                 universal_newlines=True,
                 bufsize=1  # Line buffering
             )
-            
+            stderr_lines, stderr_thread = _start_stderr_drain(current_process)
+
             # Enhanced progress monitoring with timeout
             progress = 0
             last_progress_time = time.time()
@@ -375,7 +379,6 @@ def convert_file(input_path: str, output_path: str,
             
             while current_process.poll() is None:
                 # Use select with timeout to prevent blocking indefinitely
-                import select
                 ready, _, _ = select.select([current_process.stdout], [], [], 1.0)
                 
                 if ready:
@@ -434,19 +437,16 @@ def convert_file(input_path: str, output_path: str,
                     print(f"\rProgress: {progress:.1f}% | FPS: {encoding_fps:.1f} | CPU: {cpu_percent}% | RAM: {memory_percent}% | Idle: {activity_seconds}s", 
                           end='', flush=True)
                     last_progress_time = time.time()
-                    
-                    # If no progress for too long, print additional debug info
-                    if activity_seconds > 20:
-                        # Force stderr read to get any error messages
-                        error_output = ""
-                        if current_process.stderr:
-                            error_output = current_process.stderr.read(1024)
-                        if error_output:
-                            print(f"\nFFmpeg stderr: {error_output}")
-            
+
+                    if activity_seconds > 20 and stderr_lines:
+                        print(f"\nFFmpeg stderr: {''.join(stderr_lines[-10:])}")
+
             # Get final results
-            stdout, stderr = current_process.communicate()
-            
+            stdout, _ = current_process.communicate()
+            if stderr_thread:
+                stderr_thread.join(timeout=5)
+            stderr = ''.join(stderr_lines)
+
             if current_process.returncode == 0:
                 duration = time.time() - start_time
                 
@@ -461,7 +461,10 @@ def convert_file(input_path: str, output_path: str,
                     # Single line output format for easier parsing
                     print(f"\nTime: ({duration:.1f} seconds), File Size: {output_size_mb:.2f} MB, " +
                           f"Size Reduction: ({size_reduction_pct:.1f}%), Encode Speed: ({avg_fps:.1f} FPS)")
-                    
+
+                    if not verify_output_file(output_path):
+                        return False
+
                     return True
                 else:
                     print(f"Error: Output file missing or empty: {output_path}")
@@ -479,15 +482,6 @@ def convert_file(input_path: str, output_path: str,
         # Remove temp file
         if os.path.exists(temp_path):
             os.remove(temp_path)
-
-    # Fallback if the smart approach fails
-    if not conversion_success and use_hardware:
-        logging.warning("Smart stream handling failed, trying simpler approach...")
-        # Simpler fallback approach - use hardware only for main video, copy everything else
-        ffmpeg_cmd = ['ffmpeg', '-y', '-i', input_path,
-                      '-c:v:0', 'hevc_nvenc', '-preset', 'p4', '-qp', str(crf), '-tag:v', 'hvc1',
-                      '-c:v:1', 'copy', '-c:a', 'copy', '-map', '0', output_path]
-        # Execute fallback command...
 
 def get_audio_streams(filepath):
     """Detect and analyze audio streams in the media file"""
@@ -746,7 +740,37 @@ def verify_file_readable(file_path):
     
     return True, None
 
-def build_ffmpeg_command(input_file, output_file, probe_result, hardware_accel=False, crf=24):
+def validate_manifest_paths(manifest):
+    """
+    Ensure manifest file paths stay within declared input/output roots.
+
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    required_keys = ('input_dir', 'output_dir', 'files')
+    for key in required_keys:
+        if key not in manifest:
+            return False, f"Manifest missing required key: {key}"
+
+    input_root = Path(manifest['input_dir']).resolve()
+    output_root = Path(manifest['output_dir']).resolve()
+
+    for file_info in manifest['files']:
+        for path_key in ('input_path', 'output_path'):
+            if path_key not in file_info:
+                return False, f"Manifest entry missing {path_key}"
+
+        input_path = Path(file_info['input_path']).resolve()
+        output_path = Path(file_info['output_path']).resolve()
+
+        if not _path_within_root(input_path, input_root):
+            return False, f"Input path escapes input_dir: {input_path}"
+        if not _path_within_root(output_path, output_root):
+            return False, f"Output path escapes output_dir: {output_path}"
+
+    return True, None
+
+def build_ffmpeg_command(input_file, output_file, probe_result, hardware_accel=False, crf=24, archive=False):
     """
     Build the ffmpeg command with proper handling of all stream types.
     
@@ -866,9 +890,20 @@ def main():
         return 1
     
     # Load manifest
-    with open(args.manifest, 'r') as f:
-        manifest = json.load(f)
-    
+    try:
+        with open(args.manifest, 'r') as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Error loading manifest: {exc}")
+        return 1
+
+    is_valid, error_msg = validate_manifest_paths(manifest)
+    if not is_valid:
+        print(f"Error: Invalid manifest: {error_msg}")
+        return 1
+
+    setup_logging(manifest['output_dir'])
+
     files = manifest["files"]
     # Filter files based on allowed extensions
     allowed_extensions = {'.m4v', '.avi', '.mp4', '.mkv', '.mov'}

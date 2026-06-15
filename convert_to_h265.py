@@ -7,6 +7,7 @@ Orchestrates scanning, space analysis, and conversion.
 import argparse
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -72,7 +73,7 @@ def main():
     if not args.manifest:
         # Generate manifest by scanning
         scan_cmd = [
-            "python3", os.path.join(script_dir, "scan_media.py"),
+            sys.executable, os.path.join(script_dir, "scan_media.py"),
             str(input_dir),
             str(output_dir),
             "--manifest", manifest_path
@@ -90,7 +91,7 @@ def main():
     
     # Check disk space
     space_cmd = [
-        "python3", os.path.join(script_dir, "analyze_space.py"),
+        sys.executable, os.path.join(script_dir, "analyze_space.py"),
         manifest_path,
         "--min-free", str(args.min_free_space)
     ]
@@ -100,7 +101,7 @@ def main():
     
     # Build conversion command
     convert_cmd = [
-        "python3", os.path.join(script_dir, "convert_media.py"),
+        sys.executable, os.path.join(script_dir, "convert_media.py"),
         manifest_path,
         "--crf", str(args.crf)
     ]

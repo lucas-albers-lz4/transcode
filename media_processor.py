@@ -6,9 +6,10 @@ import platform
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import psutil
 from tabulate import tabulate
@@ -26,8 +27,10 @@ class MediaProcessor:
         logical_cpus = os.cpu_count()
         physical_cpus = psutil.cpu_count(logical=False)
         
-        # Check if running on Apple Silicon
-        is_apple_silicon = platform.processor() == 'arm'
+        # Check if running on Apple Silicon (platform.processor() is unreliable on macOS)
+        is_apple_silicon = (
+            platform.system() == 'Darwin' and platform.machine() in ('arm64', 'aarch64')
+        )
         
         total_memory = psutil.virtual_memory().total
         max_memory_gb = (total_memory / (1024**3)) * 0.75  # Use 75% of total RAM
@@ -106,6 +109,39 @@ class MediaProcessor:
     def save_cache(self):
         with open(self.cache_file, 'w') as f:
             json.dump(self.analysis_cache, f, indent=4)
+
+    @staticmethod
+    def _parse_bitrate_kbps(bitrate: Any) -> int:
+        """Parse ffprobe bit_rate (bits/sec) to kbps."""
+        if bitrate is None or bitrate == 'unknown':
+            return 0
+        try:
+            return int(bitrate) // 1000
+        except (ValueError, TypeError):
+            return 0
+
+    @staticmethod
+    def _start_stderr_drain(process: subprocess.Popen) -> tuple:
+        """Drain stderr in a background thread to prevent pipe deadlocks."""
+        stderr_lines: List[str] = []
+
+        def _drain() -> None:
+            if process.stderr:
+                for line in process.stderr:
+                    stderr_lines.append(line)
+
+        thread = threading.Thread(target=_drain, daemon=True)
+        thread.start()
+        return stderr_lines, thread
+
+    def find_media_files(self, directory: Union[str, Path]) -> List[str]:
+        """Find media files recursively in a directory."""
+        media_extensions = {'.mp4', '.mkv', '.avi', '.mov', '.m4v'}
+        return [
+            str(path)
+            for path in Path(directory).rglob('*')
+            if path.is_file() and path.suffix.lower() in media_extensions
+        ]
 
     def analyze_media(self, filepath):
         """
@@ -307,13 +343,29 @@ class MediaProcessor:
             print(f"Error accessing file {filepath}: {e}")
             return None
 
-        # Check if file is in cache
-        if str(filepath) in self.analysis_cache:
-            return self.analysis_cache[str(filepath)]
+        # Check if file is in cache (invalidate when mtime or size changes)
+        cache_key = str(filepath)
+        cached = self.analysis_cache.get(cache_key)
+        if cached:
+            try:
+                stat = filepath.stat()
+                if (
+                    cached.get('_mtime') == stat.st_mtime
+                    and cached.get('_size') == stat.st_size
+                ):
+                    return cached
+            except OSError:
+                pass
 
         info = self.analyze_media(filepath)
         if info:
-            self.analysis_cache[str(filepath)] = info
+            try:
+                stat = filepath.stat()
+                info['_mtime'] = stat.st_mtime
+                info['_size'] = stat.st_size
+            except OSError:
+                pass
+            self.analysis_cache[cache_key] = info
             self.save_cache()
         return info
 
@@ -450,13 +502,15 @@ class MediaProcessor:
                 ])
 
         # Smart audio transcoding
-        if 'audio' in analysis and analysis['audio']:
-            audio_info = analysis['audio']
-            
+        audio_info = analysis.get('current', {}).get('audio')
+        if audio_info:
+            bitrate_kbps = self._parse_bitrate_kbps(audio_info.get('bitrate'))
+            channels = int(audio_info.get('channels', 2))
+
             # Determine audio codec
             if audio_info['codec'] in ['aac', 'alac']:
                 # If already AAC/ALAC and high quality, just copy
-                if audio_info.get('bitrate', 0) >= 192:
+                if bitrate_kbps == 0 or bitrate_kbps >= 192:
                     cmd.extend(['-c:a', 'copy'])
                     print("Copying high-quality AAC/ALAC audio stream")
                 else:
@@ -465,16 +519,14 @@ class MediaProcessor:
                         '-c:a', 'aac',
                         '-b:a', '192k',
                         '-ar', audio_info['sample_rate'],
-                        '-ac', str(audio_info['channels']),
+                        '-ac', str(channels),
                         '-aac_coder', 'twoloop'  # High quality AAC encoding
                     ])
                     print("Re-encoding AAC with quality improvement")
             else:
                 # For non-AAC sources, smart transcoding
-                target_bitrate = min(192, audio_info.get('bitrate', 192))
-                
-                # Maintain or reduce channels
-                target_channels = min(2, audio_info.get('channels', 2))
+                target_bitrate = min(192, bitrate_kbps) if bitrate_kbps > 0 else 192
+                target_channels = min(2, channels)
                 
                 cmd.extend([
                     '-c:a', 'aac',
@@ -513,6 +565,8 @@ class MediaProcessor:
         print(f"Using {self.thread_count} threads with {self.memory_per_thread}MB per thread")
         print(f"Command: {' '.join(cmd)}")
         
+        stderr_lines: List[str] = []
+        stderr_thread = None
         try:
             self.current_process = subprocess.Popen(
                 cmd,
@@ -521,7 +575,8 @@ class MediaProcessor:
                 universal_newlines=True,
                 bufsize=1  # Line buffered
             )
-            
+            stderr_lines, stderr_thread = self._start_stderr_drain(self.current_process)
+
             duration = None
             progress = 0
             last_progress_time = time.time()
@@ -554,8 +609,11 @@ class MediaProcessor:
                 
                     last_progress_time = time.time()
             
-            stdout, stderr = self.current_process.communicate()
-            
+            stdout, _ = self.current_process.communicate()
+            if stderr_thread:
+                stderr_thread.join(timeout=5)
+            stderr = ''.join(stderr_lines)
+
             if self.current_process.returncode == 0:
                 print(f"\nSuccessfully transcoded to {output_path}")
                 # Verify output file
@@ -724,14 +782,15 @@ class MediaProcessor:
             if reasons:
                 encode_display += f" ({reasons[0]})"  # Show first reason
 
-            # Determine which encoder will actually be used based on transcode_file logic
-            if analysis['recommended']['codec'] != 'current':
-                if analysis['recommended']['codec'] == 'libx265':
-                    encode_display = "HARDWARE (VideoToolbox)"
-                else:
-                    encode_display = "SOFTWARE (x265)"
-            else:
+            if analysis['recommended']['codec'] == 'current':
                 encode_display = "SKIP (current)"
+            elif analysis['recommended']['codec'] == 'libx265':
+                if recommended == 'software':
+                    encode_display = "SOFTWARE (x265)"
+                else:
+                    encode_display = "HARDWARE (VideoToolbox)"
+            else:
+                encode_display = "SOFTWARE (x264)"
 
             row = [
                 os.path.basename(filepath),
@@ -743,10 +802,11 @@ class MediaProcessor:
                 time_estimate,  # New column with HW/SW time estimates
                 encode_display  # New column with Recommended Encoder
             ]
-            table_data.append(row)
-        
+            table_data.append((sw_time, row))
+
         # Sort by estimated software transcode time (descending)
-        table_data.sort(key=lambda x: float(x[3]), reverse=True)
+        table_data.sort(key=lambda item: item[0], reverse=True)
+        table_data = [row for _, row in table_data]
         
         table = tabulate(table_data, headers=headers, tablefmt="grid")
         
@@ -816,7 +876,6 @@ class MediaProcessor:
                 f"{size_mb:.2f}",
                 audio_info,
                 data['recommended']['codec'],
-                data['recommended']['resolution'],
                 f"{savings:.2f}"
             ]
             rows.append(row)
@@ -830,16 +889,14 @@ class MediaProcessor:
         """Analyze all media files in directory"""
         media_files = self.find_media_files(directory)
         analysis_results = {}
-        
+
         print(f"\nAnalyzing {len(media_files)} files...")
-        
-        # Just process the first file for testing
-        test_file = media_files[0]
-        print(f"\nTesting with single file: {test_file}")
-        analysis = self.analyze_media(test_file)
-        if analysis:
-            analysis_results[test_file] = analysis
-        
+
+        for media_file in media_files:
+            analysis = self.analyze_file(media_file)
+            if analysis:
+                analysis_results[media_file] = analysis
+
         return analysis_results
 
     def benchmark_transcode(self, filepath, duration=60):
