@@ -42,6 +42,10 @@ def main():
                         help="Show raw ffmpeg output instead of progress tracking")
     parser.add_argument("--archive", action="store_true",
                         help="Use higher compression settings for archival quality")
+    parser.add_argument("--skip-subtitles", action="store_true",
+                        help="Exclude subtitle streams from output")
+    parser.add_argument("--hw-preset", type=str,
+                        help="Hardware encoder preset (p1-p7 for NVENC, quality/balanced/speed for VideoToolbox)")
     args = parser.parse_args()
     
     # Validate input and output directories
@@ -121,7 +125,13 @@ def main():
     
     if args.archive:
         convert_cmd.append("--archive")
-    
+
+    if args.skip_subtitles:
+        convert_cmd.append("--skip-subtitles")
+
+    if args.hw_preset:
+        convert_cmd.extend(["--hw-preset", args.hw_preset])
+
     # Run conversion
     if not run_command(convert_cmd, "Converting media files"):
         return 1

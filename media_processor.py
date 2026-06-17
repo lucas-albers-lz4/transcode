@@ -8,7 +8,6 @@ import select
 import signal
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -16,7 +15,12 @@ from typing import Any, Dict, List, Optional, Union
 import psutil
 from tabulate import tabulate
 
-from ffmpeg_utils import get_media_duration, parse_ffmpeg_progress_line
+from ffmpeg_utils import (
+    get_media_duration,
+    parse_ffmpeg_progress_line,
+    start_stderr_drain,
+    check_ffmpeg_dependencies,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +79,13 @@ class MediaProcessor:
 
     def _check_dependencies(self):
         """Check if required dependencies are installed"""
+        if not check_ffmpeg_dependencies():
+            sys.exit(1)
+
         try:
-            # Check ffmpeg and its capabilities
-            result = subprocess.run(['ffmpeg', '-encoders'], capture_output=True, text=True, check=True)
+            result = subprocess.run(
+                ['ffmpeg', '-encoders'], capture_output=True, text=True, check=True
+            )
             
             # Check for hardware encoders
             hw_encoders = {
@@ -95,8 +103,7 @@ class MediaProcessor:
                 print("Try reinstalling ffmpeg: brew reinstall ffmpeg")
                 
         except (subprocess.CalledProcessError, FileNotFoundError):
-            print("Error: ffmpeg is not installed")
-            print("Please install ffmpeg using: brew install ffmpeg")
+            print("Error: Could not query ffmpeg encoders")
             sys.exit(1)
 
         # Check mediainfo
@@ -128,25 +135,16 @@ class MediaProcessor:
 
     @staticmethod
     def _start_stderr_drain(process: subprocess.Popen) -> tuple:
-        """Drain stderr in a background thread to prevent pipe deadlocks."""
-        stderr_lines: List[str] = []
-
-        def _drain() -> None:
-            if process.stderr:
-                for line in process.stderr:
-                    stderr_lines.append(line)
-
-        thread = threading.Thread(target=_drain, daemon=True)
-        thread.start()
-        return stderr_lines, thread
+        return start_stderr_drain(process)
 
     def find_media_files(self, directory: Union[str, Path]) -> List[str]:
         """Find media files recursively in a directory."""
-        media_extensions = {'.mp4', '.mkv', '.avi', '.mov', '.m4v'}
+        from ffmpeg_utils import MEDIA_EXTENSIONS, is_media_file
+
         return [
             str(path)
             for path in Path(directory).rglob('*')
-            if path.is_file() and path.suffix.lower() in media_extensions
+            if path.is_file() and is_media_file(path)
         ]
 
     def analyze_media(self, filepath):
@@ -1191,8 +1189,9 @@ def main():
 
     for path in args.paths:
         if os.path.isdir(path):
-            files = [f for f in Path(path).rglob("*") 
-                    if f.suffix.lower() in ['.mp4', '.mkv', '.avi', '.mov', '.m4v']]
+            from ffmpeg_utils import is_media_file
+
+            files = [f for f in Path(path).rglob("*") if f.is_file() and is_media_file(f)]
         else:
             files = [Path(path)]
 

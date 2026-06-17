@@ -10,18 +10,11 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 
-
-def is_media_file(path: Path) -> bool:
-    """Check if file is a media file by extension."""
-    return path.suffix.lower() in ['.mp4', '.mkv', '.avi', '.mov', '.m4v']
-
-def _path_within_root(path: Path, root: Path) -> bool:
-    """Return True when path resolves inside root."""
-    try:
-        path.resolve().relative_to(root.resolve())
-        return True
-    except ValueError:
-        return False
+from ffmpeg_utils import (
+    check_ffmpeg_dependencies,
+    is_media_file,
+    path_within_root,
+)
 
 def is_h265_encoded(filepath: Path) -> bool:
     """Check if file is already h265 encoded."""
@@ -134,7 +127,7 @@ def find_media_files(input_dir: Path, output_dir: Path, check_permissions: bool 
         if not filepath.is_file() or not is_media_file(filepath):
             continue
 
-        if not _path_within_root(filepath, input_dir):
+        if not path_within_root(filepath, input_dir):
             print(f"Warning: Skipping path outside input directory: {filepath}")
             continue
 
@@ -210,31 +203,6 @@ def check_hw_encoders():
     except Exception:
         return {'h264_videotoolbox': False, 'hevc_videotoolbox': False}
 
-def check_dependencies():
-    """Check if required dependencies (ffmpeg & ffprobe) are installed."""
-    dependencies = ['ffmpeg', 'ffprobe']
-    missing = []
-    
-    for cmd in dependencies:
-        try:
-            # Use 'which' on Unix-based systems to find the command location
-            result = subprocess.run(['which', cmd], 
-                                   capture_output=True, 
-                                   text=True)
-            if result.returncode != 0:
-                missing.append(cmd)
-        except Exception:
-            missing.append(cmd)
-    
-    if missing:
-        print(f"ERROR: Missing required dependencies: {', '.join(missing)}")
-        print("Please install ffmpeg with: sudo apt install ffmpeg (Ubuntu/Debian)")
-        print("                         or: sudo dnf install ffmpeg (Fedora)")
-        print("                         or: brew install ffmpeg (macOS)")
-        return False
-    
-    return True
-
 def main():
     parser = argparse.ArgumentParser(description="Scan for media files to convert")
     parser.add_argument("input_dir", help="Input directory to scan")
@@ -245,8 +213,7 @@ def main():
                         help="Check if source files are readable")
     args = parser.parse_args()
     
-    # Check for ffmpeg/ffprobe
-    if not check_dependencies():
+    if not check_ffmpeg_dependencies():
         return 1
         
     input_dir = Path(args.input_dir).resolve()

@@ -10,7 +10,6 @@ import select
 import signal
 import subprocess
 import sys
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +18,14 @@ import shlex
 import psutil
 import platform
 
-from ffmpeg_utils import get_media_duration, parse_ffmpeg_progress_line
+from ffmpeg_utils import (
+    MEDIA_EXTENSIONS,
+    check_ffmpeg_dependencies,
+    get_media_duration,
+    parse_ffmpeg_progress_line,
+    path_within_root,
+    start_stderr_drain,
+)
 
 # Global for tracking current process
 current_process = None
@@ -37,27 +43,6 @@ def signal_handler(signum, frame):
             current_process.kill()
     sys.exit(1)
 
-def _start_stderr_drain(process):
-    """Drain stderr in a background thread to prevent pipe deadlocks."""
-    stderr_lines = []
-
-    def _drain():
-        if process.stderr:
-            for line in process.stderr:
-                stderr_lines.append(line)
-
-    thread = threading.Thread(target=_drain, daemon=True)
-    thread.start()
-    return stderr_lines, thread
-
-def _path_within_root(path: Path, root: Path) -> bool:
-    """Return True when path resolves inside root."""
-    try:
-        path.resolve().relative_to(root.resolve())
-        return True
-    except ValueError:
-        return False
-
 def setup_signal_handlers():
     """Set up signal handlers for graceful termination"""
     signal.signal(signal.SIGINT, signal_handler)
@@ -69,7 +54,8 @@ def convert_file(input_path: str, output_path: str,
                  dry_run: bool = False,
                  debug: bool = False,
                  archive: bool = False,
-                 hw_preset: str = None) -> bool:
+                 hw_preset: str = None,
+                 skip_subtitles: bool = False) -> bool:
     """Convert a single file to h265 with proper audio handling"""
     global current_process
     
@@ -126,11 +112,11 @@ def convert_file(input_path: str, output_path: str,
             print(f"Original Audio Stream {i}: {codec.upper()}, {channels}ch, {sample_rate}Hz, {bitrate_kb}kb/s")
     
     # Build ffmpeg command
-    cmd = [
-        'ffmpeg',
-        '-y',  # Overwrite output without asking
-        '-i', input_path,
-    ]
+    cmd = ['ffmpeg', '-y']
+    if input_path.lower().endswith('.mkv'):
+        cmd.extend(['-fflags', '+genpts'])
+    cmd.append('-i')
+    cmd.append(input_path)
     
     # Only add progress pipe if not in debug mode
     if not debug:
@@ -295,19 +281,24 @@ def convert_file(input_path: str, output_path: str,
     output_ext = os.path.splitext(output_path)[1].lower()
     is_mp4_container = output_ext in ['.mp4', '.m4v']
 
-    for sub_i, stream in enumerate(subtitle_streams):
-        if is_mp4_container:
-            cmd.extend([f'-c:s:{sub_i}', 'mov_text'])
-            print(
-                f"Subtitle stream {stream.get('index')}: "
-                f"Converting to mov_text for MP4 container"
-            )
-        else:
-            cmd.extend([f'-c:s:{sub_i}', 'copy'])
-            print(f"Subtitle stream {stream.get('index')}: Copying for MKV container")
+    if skip_subtitles:
+        if subtitle_streams:
+            print(f"Skipping {len(subtitle_streams)} subtitle stream(s)")
+        cmd.extend(['-map', '0:v', '-map', '0:a'])
+    else:
+        for sub_i, stream in enumerate(subtitle_streams):
+            if is_mp4_container:
+                cmd.extend([f'-c:s:{sub_i}', 'mov_text'])
+                print(
+                    f"Subtitle stream {stream.get('index')}: "
+                    f"Converting to mov_text for MP4 container"
+                )
+            else:
+                cmd.extend([f'-c:s:{sub_i}', 'copy'])
+                print(f"Subtitle stream {stream.get('index')}: Copying for MKV container")
+        cmd.extend(['-map', '0'])
 
     cmd.extend([
-        '-map', '0',
         '-movflags', '+faststart',
         output_path
     ])
@@ -319,7 +310,8 @@ def convert_file(input_path: str, output_path: str,
     if dry_run:
         print("DRY RUN: Would execute above command")
         return True
-    
+
+    conversion_succeeded = False
     try:
         # Create temp file to mark in-progress
         with open(temp_path, 'w') as f:
@@ -351,6 +343,7 @@ def convert_file(input_path: str, output_path: str,
                     if not verify_output_file(output_path):
                         return False
 
+                    conversion_succeeded = True
                     return True
                 else:
                     print(f"Error: Output file missing or empty: {output_path}")
@@ -367,7 +360,7 @@ def convert_file(input_path: str, output_path: str,
                 universal_newlines=True,
                 bufsize=1  # Line buffering
             )
-            stderr_lines, stderr_thread = _start_stderr_drain(current_process)
+            stderr_lines, stderr_thread = start_stderr_drain(current_process)
 
             total_duration = get_media_duration(input_path)
             progress = 0.0
@@ -452,6 +445,7 @@ def convert_file(input_path: str, output_path: str,
                     if not verify_output_file(output_path):
                         return False
 
+                    conversion_succeeded = True
                     return True
                 else:
                     print(f"Error: Output file missing or empty: {output_path}")
@@ -466,9 +460,14 @@ def convert_file(input_path: str, output_path: str,
     
     finally:
         current_process = None
-        # Remove temp file
         if os.path.exists(temp_path):
             os.remove(temp_path)
+        if not conversion_succeeded and os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+                print(f"Removed incomplete output file: {output_path}")
+            except OSError as exc:
+                print(f"Warning: Could not remove incomplete output: {exc}")
 
 def get_audio_streams(filepath):
     """Detect and analyze audio streams in the media file"""
@@ -509,36 +508,45 @@ def get_subtitle_streams(filepath):
         return []
 
 def setup_logging(output_dir):
-    """Set up logging to file and console"""
+    """Set up logging to file and console. Returns the log file path."""
     log_dir = os.path.join(output_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
-    
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(log_dir, f"conversion_{timestamp}.log")
-    
-    # Create logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    
-    # File handler
+
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return log_file
+
+    root_logger.setLevel(logging.INFO)
+
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.INFO)
-    
-    # Console handler
+
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
-    
-    # Create formatter and add to handlers
+
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)
-    
-    # Add handlers to logger
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    
+
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
     logging.info(f"Log file created at {log_file}")
-    return logger
+    return log_file
+
+
+def run_error_analysis(log_file):
+    """Run analyze_errors.py against a conversion log when failures occur."""
+    script_dir = Path(__file__).resolve().parent
+    analyze_script = script_dir / 'analyze_errors.py'
+    if not analyze_script.is_file() or not os.path.isfile(log_file):
+        return
+
+    print(f"\n=== Error Analysis ({log_file}) ===")
+    subprocess.run([sys.executable, str(analyze_script), log_file], check=False)
 
 def verify_output_file(output_path):
     """Verify output file integrity using ffmpeg"""
@@ -619,70 +627,6 @@ def is_valid_hevc_file(file_path):
         print(f"Error validating file {file_path}: {e}")
         return False
 
-def check_dependencies():
-    """Check if required dependencies (ffmpeg & ffprobe) are installed."""
-    dependencies = ['ffmpeg', 'ffprobe']
-    missing = []
-    
-    for cmd in dependencies:
-        try:
-            # Use 'which' on Unix-based systems to find the command location
-            result = subprocess.run(['which', cmd], 
-                                   capture_output=True, 
-                                   text=True)
-            if result.returncode != 0:
-                missing.append(cmd)
-        except Exception:
-            missing.append(cmd)
-    
-    if missing:
-        print(f"ERROR: Missing required dependencies: {', '.join(missing)}")
-        print("Please install ffmpeg")
-        
-        import platform
-        system = platform.system()
-        
-        if system == 'Darwin':  # macOS
-            print("brew install ffmpeg")
-        elif system == 'Linux':
-            print("apt-get install ffmpeg  # For Debian/Ubuntu")
-            print("yum install ffmpeg      # For CentOS/RHEL")
-            print("\nFor NVIDIA hardware acceleration support:")
-            print("1. Ensure NVIDIA drivers are installed")
-            print("2. Install or compile FFmpeg with NVENC support:")
-            print("   - Ubuntu: apt install ffmpeg nvidia-cuda-toolkit")
-            print("   - Or compile FFmpeg with: --enable-cuda-llvm --enable-ffnvcodec")
-        return False
-    
-    # Check for hardware encoder support if relevant
-    import platform
-    system = platform.system()
-    
-    if system == 'Linux':
-        try:
-            # Check if nvidia-smi command exists
-            nvidia_exists = subprocess.run(['which', 'nvidia-smi'], 
-                                         capture_output=True, 
-                                         text=True).returncode == 0
-            
-            if nvidia_exists:
-                # Check if ffmpeg has nvenc support
-                nvenc_check = subprocess.run(['ffmpeg', '-encoders'], 
-                                          capture_output=True, 
-                                          text=True)
-                if 'hevc_nvenc' not in nvenc_check.stdout:
-                    print("WARNING: NVIDIA GPU detected, but FFmpeg is not compiled with NVENC support.")
-                    print("You will not be able to use hardware acceleration.")
-                    print("\nFor NVIDIA hardware acceleration support:")
-                    print("1. Install or compile FFmpeg with NVENC support:")
-                    print("   - Ubuntu: apt install ffmpeg nvidia-cuda-toolkit")
-                    print("   - Or compile FFmpeg with: --enable-cuda-llvm --enable-ffnvcodec")
-                    print("\nWill use software encoding for now.")
-        except:
-            pass  # Silently ignore any errors in the additional check
-    
-    return True
-
 def verify_file_readable(file_path):
     """
     Verify that the file is readable by the current user.
@@ -728,9 +672,9 @@ def validate_manifest_paths(manifest):
         input_path = Path(file_info['input_path']).resolve()
         output_path = Path(file_info['output_path']).resolve()
 
-        if not _path_within_root(input_path, input_root):
+        if not path_within_root(input_path, input_root):
             return False, f"Input path escapes input_dir: {input_path}"
-        if not _path_within_root(output_path, output_root):
+        if not path_within_root(output_path, output_root):
             return False, f"Output path escapes output_dir: {output_path}"
 
     return True, None
@@ -833,10 +777,11 @@ def main():
                         help="Use higher compression settings for archival quality")
     parser.add_argument("--hw-preset", type=str, 
                         help="Hardware encoder preset (p1-p7 for NVENC, quality/balanced/speed for VideoToolbox)")
+    parser.add_argument("--skip-subtitles", action="store_true",
+                        help="Exclude subtitle streams from output")
     args = parser.parse_args()
     
-    # Check for ffmpeg/ffprobe
-    if not check_dependencies():
+    if not check_ffmpeg_dependencies(warn_nvenc=True):
         return 1
     
     # Load manifest
@@ -852,12 +797,13 @@ def main():
         print(f"Error: Invalid manifest: {error_msg}")
         return 1
 
-    setup_logging(manifest['output_dir'])
+    log_file = setup_logging(manifest['output_dir'])
 
     files = manifest["files"]
-    # Filter files based on allowed extensions
-    allowed_extensions = {'.m4v', '.avi', '.mp4', '.mkv', '.mov'}
-    files = [file for file in files if Path(file["input_path"]).suffix.lower() in allowed_extensions]
+    files = [
+        file for file in files
+        if Path(file["input_path"]).suffix.lower() in MEDIA_EXTENSIONS
+    ]
     if args.max_files > 0:
         files = files[:args.max_files]
     
@@ -868,9 +814,14 @@ def main():
     success_count = 0
     fail_count = 0
     
-    print(f"Starting conversion of {len(files)} files")
-    print(f"CRF: {args.crf}, Hardware: {args.hardware}, Dry Run: {args.dry_run}, Debug: {args.debug}, Archive: {args.archive}, HW Preset: {args.hw_preset}")
+    print(
+        f"CRF: {args.crf}, Hardware: {args.hardware}, Dry Run: {args.dry_run}, "
+        f"Debug: {args.debug}, Archive: {args.archive}, HW Preset: {args.hw_preset}, "
+        f"Skip Subtitles: {args.skip_subtitles}"
+    )
     
+    print(f"Starting conversion of {len(files)} files")
+
     for i, file_info in enumerate(files):
         print(f"\n[{i+1}/{len(files)}] Processing file")
         
@@ -888,7 +839,8 @@ def main():
             dry_run=args.dry_run,
             debug=args.debug,
             archive=args.archive,
-            hw_preset=args.hw_preset
+            hw_preset=args.hw_preset,
+            skip_subtitles=args.skip_subtitles,
         )
         
         if success:
@@ -897,6 +849,8 @@ def main():
             fail_count += 1
     
     print(f"\nConversion complete: {success_count} succeeded, {fail_count} failed")
+    if fail_count > 0:
+        run_error_analysis(log_file)
     return 0 if fail_count == 0 else 1
 
 if __name__ == "__main__":

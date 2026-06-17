@@ -1,8 +1,80 @@
 """Shared FFmpeg/ffprobe helpers."""
 
+import platform
 import re
+import shutil
 import subprocess
-from typing import Any, Dict, Optional
+import threading
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+MEDIA_EXTENSIONS = frozenset({'.mp4', '.mkv', '.avi', '.mov', '.m4v'})
+
+
+def is_media_file(path: Union[str, Path]) -> bool:
+    """Return True when path has a supported media extension."""
+    return Path(path).suffix.lower() in MEDIA_EXTENSIONS
+
+
+def path_within_root(path: Union[str, Path], root: Union[str, Path]) -> bool:
+    """Return True when path resolves inside root."""
+    try:
+        Path(path).resolve().relative_to(Path(root).resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def start_stderr_drain(process: subprocess.Popen) -> Tuple[List[str], threading.Thread]:
+    """Drain stderr in a background thread to prevent pipe deadlocks."""
+    stderr_lines: List[str] = []
+
+    def _drain() -> None:
+        if process.stderr:
+            for line in process.stderr:
+                stderr_lines.append(line)
+
+    thread = threading.Thread(target=_drain, daemon=True)
+    thread.start()
+    return stderr_lines, thread
+
+
+def check_ffmpeg_dependencies(warn_nvenc: bool = False) -> bool:
+    """
+    Verify ffmpeg and ffprobe are installed.
+
+    When warn_nvenc is True on Linux, print a warning if NVIDIA is present
+    but FFmpeg lacks NVENC support.
+    """
+    missing = [cmd for cmd in ('ffmpeg', 'ffprobe') if shutil.which(cmd) is None]
+    if missing:
+        print(f"ERROR: Missing required dependencies: {', '.join(missing)}")
+        print("Please install ffmpeg")
+        system = platform.system()
+        if system == 'Darwin':
+            print("brew install ffmpeg")
+        elif system == 'Linux':
+            print("apt-get install ffmpeg  # For Debian/Ubuntu")
+            print("yum install ffmpeg      # For CentOS/RHEL")
+        return False
+
+    if warn_nvenc and platform.system() == 'Linux' and shutil.which('nvidia-smi'):
+        try:
+            encoders = subprocess.run(
+                ['ffmpeg', '-encoders'],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            if 'hevc_nvenc' not in encoders.stdout:
+                print(
+                    "WARNING: NVIDIA GPU detected, but FFmpeg lacks NVENC support. "
+                    "Hardware encoding will fall back to software."
+                )
+        except (subprocess.CalledProcessError, OSError):
+            pass
+
+    return True
 
 
 def get_media_duration(filepath: str) -> Optional[float]:

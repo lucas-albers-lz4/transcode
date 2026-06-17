@@ -26,20 +26,28 @@ def extract_error_context(log_file, context_lines=20):
     with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
         content = f.readlines()
     
-    error_pattern = r'Error converting file, ffmpeg exited with code (\d+)'
+    error_patterns = [
+        (r'Error converting file, ffmpeg exited with code (\d+)', 'code'),
+        (r'Exception during conversion:', 'exception'),
+    ]
     error_contexts = defaultdict(list)
     
     for i, line in enumerate(content):
-        match = re.search(error_pattern, line)
-        if match:
-            error_code = match.group(1)
-            
-            # Extract context (lines before and after the error)
+        for pattern, error_type in error_patterns:
+            match = re.search(pattern, line)
+            if not match:
+                continue
+
+            if error_type == 'code':
+                error_key = match.group(1)
+            else:
+                error_key = error_type
+
             start_idx = max(0, i - context_lines)
             end_idx = min(len(content), i + context_lines)
-            
             context = ''.join(content[start_idx:end_idx])
-            error_contexts[error_code].append(context)
+            error_contexts[error_key].append(context)
+            break
     
     return error_contexts
 
@@ -58,6 +66,10 @@ def analyze_error(error_code, context_samples):
     sample = context_samples[0] if context_samples else ""
     
     descriptions = {
+        "exception": {
+            "patterns": [],
+            "default": "Conversion exception"
+        },
         "8": {
             "patterns": [
                 (r"Automatic encoder selection failed.*subtitle", "Subtitle encoder issue"),
@@ -83,7 +95,8 @@ def analyze_error(error_code, context_samples):
     }
     
     fixes = {
-        "Subtitle encoder issue": "Add '-c:s mov_text' for MP4 output or use '-map 0:v -map 0:a' to exclude subtitles",
+        "Conversion exception": "Review the log context and retry with --debug for full ffmpeg output",
+        "Subtitle encoder issue": "Add '-c:s mov_text' for MP4 output or use --skip-subtitles",
         "Permission denied": "Check file permissions and run with appropriate access",
         "File not found": "Verify file paths and existence",
         "Process interrupted": "Check for system resource limitations or interruptions",
