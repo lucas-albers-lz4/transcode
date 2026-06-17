@@ -21,9 +21,19 @@ def check_disk_space(manifest_path: str, min_free_gb: float = 1.0) -> bool:
     Returns:
         bool: True if enough space, False otherwise
     """
-    with open(manifest_path, 'r') as f:
-        manifest = json.load(f)
-    
+    try:
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Error loading manifest: {exc}")
+        return False
+
+    required_keys = ('output_dir', 'total_size_bytes')
+    for key in required_keys:
+        if key not in manifest:
+            print(f"Error: Manifest missing required key: {key}")
+            return False
+
     output_dir = Path(manifest["output_dir"])
     
     # Calculate estimated output size (assuming 70% of input size)

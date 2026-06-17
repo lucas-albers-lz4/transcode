@@ -762,29 +762,6 @@ def display_summary_table(results):
             
             print(f"* Fastest: {fastest['preset']} quality={fastest['quality_value']} ({fastest['encoding_time']:.2f}s)")
             print(f"* Best compression: {smallest['preset']} quality={smallest['quality_value']} ({smallest['size_reduction']:.2f}% reduction)")
-            
-        
-        # Sort results by preset then quality
-        table_data.sort(key=lambda row: (row[0], row[1]))
-        
-        # Print the table using tabulate
-        print(tabulate(table_data, headers=headers, tablefmt="simple"))
-        
-        # Add a basic recommendation
-        if group:
-            # Find best VMAF result and best compression result
-            vmaf_results = [r for r in group if r.get("vmaf") is not None]
-            
-            if vmaf_results:
-                best_quality = max(vmaf_results, key=lambda x: x["vmaf"])
-                print(f"\nQuick recommendations:")
-                print(f"* Best quality: {best_quality['preset']} quality={best_quality['quality_value']} (VMAF: {best_quality['vmaf']:.2f})")
-            
-            fastest = min(group, key=lambda x: x["encoding_time"])
-            smallest = min(group, key=lambda x: x["encoded_size"])
-            
-            print(f"* Fastest: {fastest['preset']} quality={fastest['quality_value']} ({fastest['encoding_time']:.2f}s)")
-            print(f"* Best compression: {smallest['preset']} quality={smallest['quality_value']} ({smallest['size_reduction']:.2f}% reduction)")
 
 def test_nvenc_parameter_space(input_file, output_dir, args):
     """

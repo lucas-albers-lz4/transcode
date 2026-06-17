@@ -13,7 +13,15 @@ from typing import Any, Dict, List
 
 def is_media_file(path: Path) -> bool:
     """Check if file is a media file by extension."""
-    return path.suffix.lower() in ['.mp4', '.mkv', '.avi', '.mov']
+    return path.suffix.lower() in ['.mp4', '.mkv', '.avi', '.mov', '.m4v']
+
+def _path_within_root(path: Path, root: Path) -> bool:
+    """Return True when path resolves inside root."""
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 def is_h265_encoded(filepath: Path) -> bool:
     """Check if file is already h265 encoded."""
@@ -117,10 +125,16 @@ def find_media_files(input_dir: Path, output_dir: Path, check_permissions: bool 
     to_convert = []
     unreadable_files = []
     
+    input_dir = input_dir.resolve()
+
     for filepath in input_dir.rglob("*"):
         if not filepath.is_file() or not is_media_file(filepath):
             continue
-            
+
+        if not _path_within_root(filepath, input_dir):
+            print(f"Warning: Skipping path outside input directory: {filepath}")
+            continue
+
         rel_path = filepath.relative_to(input_dir)
         output_path = output_dir / rel_path
         
