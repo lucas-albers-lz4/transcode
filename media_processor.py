@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import logging
 import os
 import platform
+import select
 import signal
 import subprocess
 import sys
@@ -13,6 +15,10 @@ from typing import Any, Dict, List, Optional, Union
 
 import psutil
 from tabulate import tabulate
+
+from ffmpeg_utils import get_media_duration, parse_ffmpeg_progress_line
+
+logger = logging.getLogger(__name__)
 
 
 class MediaProcessor:
@@ -155,7 +161,7 @@ class MediaProcessor:
         - Just "HEVC" or "AVC" if the encoder information isn't available
         """
         try:
-            print(f"\n\nDEBUG: Starting analysis of {filepath}")
+            logger.debug("Starting analysis of %s", filepath)
             cmd = [
                 'ffprobe',
                 '-v', 'error',
@@ -166,12 +172,16 @@ class MediaProcessor:
             ]
             
             result = subprocess.run(cmd, capture_output=True, text=True)
-            print(f"DEBUG: FFprobe command output: {result.stdout[:500]}...")
+            logger.debug("FFprobe stdout (first 500 chars): %s", result.stdout[:500])
+
+            if result.returncode != 0:
+                logger.warning("FFprobe failed for %s: %s", filepath, result.stderr.strip())
+                return None
             
             if result.stderr:
-                print(f"DEBUG: FFprobe errors: {result.stderr}")
+                logger.debug("FFprobe stderr: %s", result.stderr)
                 if "moov atom not found" in result.stderr or "Invalid data found" in result.stderr:
-                    print(f"Warning: File appears to be corrupted or incomplete: {filepath}")
+                    logger.warning("File appears corrupted or incomplete: %s", filepath)
                     return None
             
             try:
@@ -184,21 +194,21 @@ class MediaProcessor:
                 print(f"Warning: No streams found in {filepath}")
                 return None
 
-            # Debug print all streams
-            print("\nDEBUG: All streams found:")
+            # Identify first video and audio streams
             video_stream = None
             audio_stream = None
             
             for stream in data['streams']:
-                print(f"Stream type: {stream.get('codec_type')}")
-                print(f"Stream data: {json.dumps(stream, indent=2)}")
-                print("-" * 50)
+                logger.debug(
+                    "Stream %s: %s",
+                    stream.get('codec_type'),
+                    stream.get('codec_name'),
+                )
                 
                 if stream['codec_type'] == 'video' and not video_stream:
                     video_stream = stream
                 elif stream['codec_type'] == 'audio' and not audio_stream:
                     audio_stream = stream
-                    print(f"\nDEBUG: Found audio stream: {json.dumps(audio_stream, indent=2)}")
 
             if not video_stream:
                 print(f"Warning: No video stream found in {filepath}")
@@ -238,14 +248,13 @@ class MediaProcessor:
             }
 
             if audio_stream:
-                print("\nDEBUG: Processing audio stream...")
                 analysis['current']['audio'] = {
                     'codec': audio_stream['codec_name'],
                     'channels': str(audio_stream.get('channels', 2)),
                     'sample_rate': audio_stream.get('sample_rate', '48000'),
                     'bitrate': audio_stream.get('bit_rate', 'unknown')
                 }
-                print(f"DEBUG: Final audio info: {json.dumps(analysis['current']['audio'], indent=2)}")
+                logger.debug("Audio info: %s", analysis['current']['audio'])
 
             # Store recommendations directly in the analysis object instead of an unused variable
             analysis['recommended'] = {
@@ -260,8 +269,7 @@ class MediaProcessor:
             return analysis
 
         except Exception as e:
-            print(f"DEBUG: Error in analyze_media: {str(e)}")
-            print(f"DEBUG: Full error info: {str(e.__class__.__name__)}: {str(e)}")
+            logger.exception("Error analyzing %s: %s", filepath, e)
             return None
 
     def determine_encode_method(self, video_stream):
@@ -577,36 +585,55 @@ class MediaProcessor:
             )
             stderr_lines, stderr_thread = self._start_stderr_drain(self.current_process)
 
-            duration = None
-            progress = 0
+            total_duration = get_media_duration(filepath)
+            progress = 0.0
+            frames_encoded = 0
+            encoding_fps = 0.0
             last_progress_time = time.time()
+            last_activity_time = time.time()
+            last_stderr_index = 0
             
-            # Monitor progress and system resources
             while self.current_process.poll() is None:
-                # Check system resources every 5 seconds
-                if time.time() - last_progress_time >= 5:
-                    cpu_percent = psutil.cpu_percent()
-                    memory_percent = psutil.virtual_memory().percent
-                    
-                    if memory_percent > 90:
-                        print("\nWarning: High memory usage detected!")
-                    
-                    # Read progress information
+                ready, _, _ = select.select([self.current_process.stdout], [], [], 1.0)
+
+                if ready:
                     output = self.current_process.stdout.readline()
                     if output:
-                        if 'Duration' in output:
-                            duration_str = output.split('Duration: ')[1].split(',')[0]
-                            h, m, s = map(float, duration_str.split(':'))
-                            duration = h * 3600 + m * 60 + s
-                        elif 'time=' in output:
-                            time_str = output.split('time=')[1].split()[0]
-                            h, m, s = map(float, time_str.split(':'))
-                            current_time = h * 3600 + m * 60 + s
-                            if duration:
-                                progress = (current_time / duration) * 100
-                                print(f"\rProgress: {progress:.1f}% | CPU: {cpu_percent}% | RAM: {memory_percent}%", 
-                                      end='', flush=True)
-                
+                        last_activity_time = time.time()
+                        updates = parse_ffmpeg_progress_line(output, total_duration)
+                        if 'progress' in updates:
+                            progress = updates['progress']
+                        if 'frame' in updates:
+                            frames_encoded = updates['frame']
+                        if 'fps' in updates:
+                            encoding_fps = updates['fps']
+
+                while last_stderr_index < len(stderr_lines):
+                    updates = parse_ffmpeg_progress_line(
+                        stderr_lines[last_stderr_index],
+                        total_duration,
+                    )
+                    last_stderr_index += 1
+                    if 'progress' in updates:
+                        progress = updates['progress']
+                    if 'frame' in updates:
+                        frames_encoded = updates['frame']
+                    if 'fps' in updates:
+                        encoding_fps = updates['fps']
+
+                if time.time() - last_progress_time >= 1:
+                    cpu_percent = psutil.cpu_percent()
+                    memory_percent = psutil.virtual_memory().percent
+
+                    if memory_percent > 90:
+                        print("\nWarning: High memory usage detected!")
+
+                    print(
+                        f"\rProgress: {progress:.1f}% | FPS: {encoding_fps:.1f} | "
+                        f"CPU: {cpu_percent}% | RAM: {memory_percent}%",
+                        end='',
+                        flush=True,
+                    )
                     last_progress_time = time.time()
             
             stdout, _ = self.current_process.communicate()
@@ -859,8 +886,6 @@ class MediaProcessor:
             audio_info = "N/A"
             if 'audio' in current:
                 audio = current['audio']
-                print(f"\nDebug - Processing audio for {filename}:")
-                print(audio)
                 audio_info = f"{audio['codec']} {audio['channels']}ch"
                 if 'bitrate' in audio and audio['bitrate'] != 'unknown':
                     try:
@@ -1134,8 +1159,15 @@ def main():
                        help='Use software encoding instead of hardware acceleration')
     parser.add_argument('--output-dir', type=str,
                        help='Output directory for transcoded files')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                       help='Enable verbose debug logging')
     parser.add_argument('paths', nargs='+', help='Paths to media files or directories')
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.WARNING,
+        format='%(levelname)s: %(message)s',
+    )
 
     processor = MediaProcessor()
     
@@ -1160,7 +1192,7 @@ def main():
     for path in args.paths:
         if os.path.isdir(path):
             files = [f for f in Path(path).rglob("*") 
-                    if f.suffix.lower() in ['.mp4', '.mkv', '.avi', '.mov']]
+                    if f.suffix.lower() in ['.mp4', '.mkv', '.avi', '.mov', '.m4v']]
         else:
             files = [Path(path)]
 

@@ -15,6 +15,7 @@ import argparse
 import json
 import subprocess
 import shutil
+import tempfile
 from datetime import datetime
 import matplotlib.pyplot as plt
 from tabulate import tabulate
@@ -163,7 +164,11 @@ def calculate_vmaf(original, encoded, duration=None):
         return None
     
     try:
-        # Use ffmpeg with libvmaf filter to compare videos
+        with tempfile.NamedTemporaryFile(
+            suffix='.json', prefix='vmaf_', delete=False
+        ) as vmaf_log:
+            vmaf_path = vmaf_log.name
+
         cmd = ['ffmpeg', '-i', original]
         
         # Add duration limit if specified
@@ -174,21 +179,23 @@ def calculate_vmaf(original, encoded, duration=None):
             '-i', encoded,
             '-filter_complex', '[0:v]setpts=PTS-STARTPTS[reference];' +
                                '[1:v]setpts=PTS-STARTPTS[distorted];' +
-                               '[reference][distorted]libvmaf=log_fmt=json:log_path=/tmp/vmaf.json',
+                               f'[reference][distorted]libvmaf=log_fmt=json:log_path={vmaf_path}',
             '-f', 'null', '-'
         ])
         
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         
-        # Parse the JSON output from the log file
         try:
-            with open('/tmp/vmaf.json', 'r') as f:
+            with open(vmaf_path, 'r') as f:
                 vmaf_data = json.load(f)
                 vmaf_score = vmaf_data.get('pooled_metrics', {}).get('vmaf', {}).get('mean', None)
                 return vmaf_score
         except Exception as e:
             print(f"Error parsing VMAF results: {e}")
             return None
+        finally:
+            if os.path.exists(vmaf_path):
+                os.remove(vmaf_path)
             
     except Exception as e:
         print(f"Error calculating VMAF: {e}")
@@ -368,7 +375,6 @@ def run_conversion_with_preset(input_file, output_file, encoder_type, preset, qu
             cmd.extend([
                 '-c:v', 'hevc_videotoolbox',
                 '-q:v', quality,
-                '-crf', str(quality_value),
                 '-tag:v', 'hvc1',
                 '-allow_sw', '1'
             ])

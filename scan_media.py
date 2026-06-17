@@ -33,7 +33,10 @@ def is_h265_encoded(filepath: Path) -> bool:
             '-of', 'default=noprint_wrappers=1:nokey=1',
             str(filepath)
         ], capture_output=True, text=True)
-        
+
+        if result.returncode != 0:
+            return False
+
         codec = result.stdout.strip().lower()
         return codec in ['hevc', 'h265']
     except Exception as e:
@@ -60,15 +63,15 @@ def get_media_info(filepath: Path) -> dict:
             '-of', 'json',
             str(filepath)
         ], capture_output=True, text=True)
+
+        if video_result.returncode == 0 and video_result.stdout.strip():
+            video_data = json.loads(video_result.stdout)
+            if 'streams' in video_data and video_data['streams']:
+                stream = video_data['streams'][0]
+                info["video_codec"] = stream.get('codec_name', 'unknown')
+                if 'width' in stream and 'height' in stream:
+                    info["resolution"] = f"{stream['width']}x{stream['height']}"
         
-        video_data = json.loads(video_result.stdout)
-        if 'streams' in video_data and video_data['streams']:
-            stream = video_data['streams'][0]
-            info["video_codec"] = stream.get('codec_name', 'unknown')
-            if 'width' in stream and 'height' in stream:
-                info["resolution"] = f"{stream['width']}x{stream['height']}"
-        
-        # Get audio info
         audio_result = subprocess.run([
             'ffprobe', '-v', 'error',
             '-select_streams', 'a:0',
@@ -76,25 +79,25 @@ def get_media_info(filepath: Path) -> dict:
             '-of', 'json',
             str(filepath)
         ], capture_output=True, text=True)
+
+        if audio_result.returncode == 0 and audio_result.stdout.strip():
+            audio_data = json.loads(audio_result.stdout)
+            if 'streams' in audio_data and audio_data['streams']:
+                stream = audio_data['streams'][0]
+                info["audio_codec"] = stream.get('codec_name', 'unknown')
+                info["audio_channels"] = int(stream.get('channels', 0))
+                if 'bit_rate' in stream and stream['bit_rate'].isdigit():
+                    bitrate = int(stream['bit_rate'])
+                    info["audio_bitrate"] = f"{bitrate//1000}k"
         
-        audio_data = json.loads(audio_result.stdout)
-        if 'streams' in audio_data and audio_data['streams']:
-            stream = audio_data['streams'][0]
-            info["audio_codec"] = stream.get('codec_name', 'unknown')
-            info["audio_channels"] = int(stream.get('channels', 0))
-            if 'bit_rate' in stream and stream['bit_rate'].isdigit():
-                bitrate = int(stream['bit_rate'])
-                info["audio_bitrate"] = f"{bitrate//1000}k"
-        
-        # Get duration
         format_result = subprocess.run([
             'ffprobe', '-v', 'error',
             '-show_entries', 'format=duration',
             '-of', 'default=noprint_wrappers=1:nokey=1',
             str(filepath)
         ], capture_output=True, text=True)
-        
-        if format_result.stdout.strip():
+
+        if format_result.returncode == 0 and format_result.stdout.strip():
             info["duration"] = float(format_result.stdout.strip())
             
         return info

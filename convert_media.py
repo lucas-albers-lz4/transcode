@@ -6,7 +6,6 @@ import argparse
 import json
 import logging
 import os
-import re
 import select
 import signal
 import subprocess
@@ -19,6 +18,8 @@ import shlex
 
 import psutil
 import platform
+
+from ffmpeg_utils import get_media_duration, parse_ffmpeg_progress_line
 
 # Global for tracking current process
 current_process = None
@@ -368,74 +369,60 @@ def convert_file(input_path: str, output_path: str,
             )
             stderr_lines, stderr_thread = _start_stderr_drain(current_process)
 
-            # Enhanced progress monitoring with timeout
-            progress = 0
+            total_duration = get_media_duration(input_path)
+            progress = 0.0
             last_progress_time = time.time()
-            last_activity_time = time.time()  # Track when we last saw activity
-            activity_timeout = 30  # Seconds to wait before assuming process is stuck
-            total_duration = None
+            last_activity_time = time.time()
+            activity_timeout = 30
             frames_encoded = 0
-            encoding_fps = 0
+            encoding_fps = 0.0
+            last_stderr_index = 0
             
             while current_process.poll() is None:
-                # Use select with timeout to prevent blocking indefinitely
                 ready, _, _ = select.select([current_process.stdout], [], [], 1.0)
                 
                 if ready:
                     stdout_line = current_process.stdout.readline()
-                    last_activity_time = time.time()  # Reset activity timer
+                    if stdout_line:
+                        last_activity_time = time.time()
+                        updates = parse_ffmpeg_progress_line(stdout_line, total_duration)
+                        if 'progress' in updates:
+                            progress = updates['progress']
+                        if 'frame' in updates:
+                            frames_encoded = updates['frame']
+                        if 'fps' in updates:
+                            encoding_fps = updates['fps']
                 else:
-                    # No data available, check if process is stuck
                     if time.time() - last_activity_time > activity_timeout:
                         print(f"\nWARNING: No activity for {activity_timeout} seconds, process may be stuck")
-                        # Check file size to see if it's growing
                         if os.path.exists(output_path):
                             current_size = os.path.getsize(output_path)
                             print(f"Current output size: {current_size/(1024*1024):.2f} MB")
-                    
-                    # Sleep briefly to reduce CPU usage
                     time.sleep(0.1)
-                    continue
+
+                while last_stderr_index < len(stderr_lines):
+                    updates = parse_ffmpeg_progress_line(
+                        stderr_lines[last_stderr_index],
+                        total_duration,
+                    )
+                    last_stderr_index += 1
+                    if 'progress' in updates:
+                        progress = updates['progress']
+                    if 'frame' in updates:
+                        frames_encoded = updates['frame']
+                    if 'fps' in updates:
+                        encoding_fps = updates['fps']
                 
-                if not stdout_line:
-                    continue
-                
-                # Parse duration info
-                if 'Duration' in stdout_line:
-                    duration_match = re.search(r'Duration: (\d+):(\d+):(\d+)', stdout_line)
-                    if duration_match:
-                        h, m, s = map(int, duration_match.groups())
-                        total_duration = h * 3600 + m * 60 + s
-                
-                # Track frames and calculate FPS
-                if 'frame=' in stdout_line:
-                    frame_match = re.search(r'frame=\s*(\d+)', stdout_line)
-                    if frame_match:
-                        current_frame = int(frame_match.group(1))
-                        frames_elapsed = current_frame - frames_encoded
-                        frames_encoded = current_frame
-                        time_elapsed = time.time() - last_progress_time
-                        if time_elapsed > 0:
-                            encoding_fps = frames_elapsed / time_elapsed
-                
-                # Parse progress info
-                if 'time=' in stdout_line:
-                    time_match = re.search(r'time=(\d+):(\d+):(\d+)', stdout_line)
-                    if time_match and total_duration:
-                        h, m, s = map(int, time_match.groups())
-                        current_time = h * 3600 + m * 60 + s
-                        progress = (current_time / total_duration) * 100
-                
-                # Only update display every second, but ensure we're checking for stalled process
                 if time.time() - last_progress_time >= 1:
-                    # Get system stats
                     cpu_percent = psutil.cpu_percent()
                     memory_percent = psutil.virtual_memory().percent
-                    
-                    # Include process activity time in status
                     activity_seconds = int(time.time() - last_activity_time)
-                    print(f"\rProgress: {progress:.1f}% | FPS: {encoding_fps:.1f} | CPU: {cpu_percent}% | RAM: {memory_percent}% | Idle: {activity_seconds}s", 
-                          end='', flush=True)
+                    print(
+                        f"\rProgress: {progress:.1f}% | FPS: {encoding_fps:.1f} | "
+                        f"CPU: {cpu_percent}% | RAM: {memory_percent}% | Idle: {activity_seconds}s",
+                        end='',
+                        flush=True,
+                    )
                     last_progress_time = time.time()
 
                     if activity_seconds > 20 and stderr_lines:
@@ -520,29 +507,6 @@ def get_subtitle_streams(filepath):
     except Exception as e:
         print(f"Error analyzing subtitles: {e}")
         return []
-
-def determine_audio_settings(audio_streams):
-    """Determine appropriate audio encoding settings based on streams"""
-    settings = []
-    
-    for i, stream in enumerate(audio_streams):
-        codec = stream.get('codec_name', '').lower()
-        bitrate = int(stream.get('bit_rate', 0)) if stream.get('bit_rate', '').isdigit() else 0
-        channels = int(stream.get('channels', 2))
-        
-        # High quality AAC/ALAC just copy
-        if codec in ['aac', 'alac'] and bitrate >= 192000:
-            settings.append(f"-c:a:{i}", "copy")
-        else:
-            # Re-encode with quality improvement
-            settings.extend([
-                f"-c:a:{i}", "aac",
-                f"-b:a:{i}", "192k",
-                f"-ac:{i}", str(min(channels, 2)),  # Limit to stereo
-                f"-ar:{i}", "48000"  # Standard sample rate
-            ])
-    
-    return settings
 
 def setup_logging(output_dir):
     """Set up logging to file and console"""
@@ -733,10 +697,11 @@ def verify_file_readable(file_path):
         return False, f"File does not exist: {file_path}"
     
     if not os.access(file_path, os.R_OK):
-        # Generate command to fix permissions
         quoted_path = shlex.quote(file_path)
-        fix_cmd = f'sudo chmod +r {quoted_path}'
-        return False, f'ERROR reading file fix via running:\n{fix_cmd}'
+        return False, (
+            f"File is not readable: {file_path}\n"
+            f"Check permissions, e.g.: chmod +r {quoted_path}"
+        )
     
     return True, None
 
@@ -809,60 +774,45 @@ def build_ffmpeg_command(input_file, output_file, probe_result, hardware_accel=F
     else:
         command.extend(['-c:v', 'libx265', '-crf', str(crf), '-preset', 'medium', '-tag:v', 'hvc1'])
     
-    # Handle audio streams
-    has_audio = False
-    for i, stream in enumerate(probe_result.get('streams', [])):
-        if stream.get('codec_type') == 'audio':
-            has_audio = True
-            codec_name = stream.get('codec_name', '').lower()
-            
-            # AAC audio can be copied without re-encoding
-            if codec_name == 'aac':
-                command.extend([f'-c:a:{i}', 'copy'])
-            else:
-                # Transcode other audio formats to AAC
-                command.extend([
-                    f'-c:a:{i}', 'aac',
-                    f'-b:a:{i}', '192k',
-                    f'-ac:{i}', '2',
-                    f'-ar:{i}', '48000'
-                ])
-    
-    # Handle subtitle streams
-    has_subtitles = any(s.get('codec_type') == 'subtitle' for s in probe_result.get('streams', []))
-    
-    if has_subtitles:
-        # Option 1: Include subtitles with proper codec for MP4 container
-        for i, stream in enumerate(probe_result.get('streams', [])):
-            if stream.get('codec_type') == 'subtitle':
-                # For MP4 output, use mov_text codec
-                command.extend([f'-c:s:{i}', 'mov_text'])
-        
-        # Use -map 0 to include all streams
-        command.extend(['-map', '0'])
-    else:
-        # If no subtitles, just map all streams
-        command.extend(['-map', '0'])
-    
-    # Add timestamp correction options for the output
-    # This helps with files that have timestamp issues
-    command.extend(['-vsync', 'cfr'])
-    
-    # Add output format specification based on extension
+    # Handle audio streams by output audio index
+    audio_streams = [
+        stream for stream in probe_result.get('streams', [])
+        if stream.get('codec_type') == 'audio'
+    ]
+    for aud_i, stream in enumerate(audio_streams):
+        codec_name = stream.get('codec_name', '').lower()
+        if codec_name == 'aac':
+            command.extend([f'-c:a:{aud_i}', 'copy'])
+        else:
+            command.extend([
+                f'-c:a:{aud_i}', 'aac',
+                f'-b:a:{aud_i}', '192k',
+                f'-ac:{aud_i}', '2',
+                f'-ar:{aud_i}', '48000',
+            ])
+
+    # Handle subtitle streams by output subtitle index
+    subtitle_streams = [
+        stream for stream in probe_result.get('streams', [])
+        if stream.get('codec_type') == 'subtitle'
+    ]
     output_ext = os.path.splitext(output_file)[1].lower()
+    is_mp4 = output_ext in ['.mp4', '.m4v']
+
+    for sub_i, _stream in enumerate(subtitle_streams):
+        if is_mp4:
+            command.extend([f'-c:s:{sub_i}', 'mov_text'])
+        else:
+            command.extend([f'-c:s:{sub_i}', 'copy'])
+
+    command.extend(['-vsync', 'cfr', '-map', '0'])
+
     if output_ext == '.mkv':
         command.extend(['-f', 'matroska'])
-    elif output_ext in ['.mp4', '.m4v']:
+    elif is_mp4:
         command.extend(['-f', 'mp4'])
-    
-    # Add other encoding parameters
-    command.extend(['-movflags', '+faststart'])
-    
-    # Use mapping that includes all streams
-    command.extend(['-map', '0'])
-    
-    # Add output file
-    command.append(output_file)
+
+    command.extend(['-movflags', '+faststart', output_file])
     
     return command
 
