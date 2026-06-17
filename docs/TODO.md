@@ -1,8 +1,25 @@
 # TODO List
 
-##Refactor
-   * ✅ update command line paramters to be consistent across them and simplify
-   * default to sane 
+## Refactor
+
+* ✅ Align command-line parameters across scripts (`convert_to_h265.py` → `convert_media.py`)
+* ✅ Centralize shared helpers in `ffmpeg_utils.py` (extensions, deps, progress, path checks)
+* Default to sane hardware/software encoding defaults per platform (ongoing — `media_processor.py` still differs)
+* Consolidate `media_processor.py` into the main `convert_to_h265` workflow (deferred — larger refactor)
+
+## Code Review Fixes (2026) ✅
+
+Completed across `apply-2026` branch work:
+
+* ✅ Critical correctness: audio path/bitrate bugs, subtitle stream indices, dead code removal, `.m4v` scan support
+* ✅ Runtime reliability: stderr pipe draining, signal handler cleanup, output verification, logging
+* ✅ Security: manifest path validation, symlink escape checks, analysis cache invalidation on mtime/size
+* ✅ Progress tracking: shared `ffmpeg_utils` parsers, ffprobe returncode checks
+* ✅ Benchmark fixes: VMAF temp file collisions, VideoToolbox invalid `-crf` flag
+* ✅ Workflow hardening: MKV `-fflags +genpts`, `--skip-subtitles`, partial output cleanup on failure
+* ✅ Error analysis auto-run on conversion failures (`analyze_errors.py` integration)
+* ✅ Orchestrator passes `--hw-preset` and `--skip-subtitles`
+
 ## Current Implementation Tasks
 
 1. **Preset Benchmark Testing** ✅
@@ -12,57 +29,48 @@
    * ✅ Generate a detailed comparison report for decision-making
    * ✅ Add preset selection option to the main program
    * ✅ Added libvmaf support check to prevent errors when not available
+   * ✅ Use unique temp files for VMAF JSON output
 
 2. **File Permission Handling** ✅
    * ✅ Add verification of input file readability
-   * ✅ Generate sudo command for fixing file permissions
    * ✅ Skip unreadable files with appropriate warnings
    * ✅ Add permission checking in dry-run mode
+   * ✅ Permission errors suggest `chmod` (no longer suggest `sudo`)
 
-3. **Subtitle Handling**
-   * Fix issue with subtitle streams causing encoder failures
-   * Add proper subtitle codec selection for mp4 containers
-   * Implement option to copy subtitle streams or remove them
-   * Explicitly set a compatible subtitle codec for MP4 containers
+3. **Subtitle Handling** ✅
+   * ✅ Fix subtitle stream index mapping (output indices, not ffprobe global indices)
+   * ✅ Add proper subtitle codec selection for MP4 containers (`mov_text`)
+   * ✅ Implement option to exclude subtitles (`--skip-subtitles`)
    * ✅ Detect subtitle streams with a dedicated function
-   * For MP4 output files, explicitly set the subtitle codec to mov_text
-   * ✅ For other containers like MKV, copy the subtitles
-   
-4. **Error Analysis Tool**
-   * Create a Python script to analyze conversion logs
-   * Group errors by ffmpeg exit codes
-   * Extract context for each error type
-   * Generate recommended fixes for common error patterns
+   * ✅ For MKV output, copy subtitles where supported
+
+4. **Error Analysis Tool** ✅
+   * ✅ Create `analyze_errors.py` to analyze conversion logs
+   * ✅ Group errors by ffmpeg exit codes and exception patterns
+   * ✅ Extract context for each error type
+   * ✅ Generate recommended fixes for common error patterns
+   * ✅ Auto-run after failed batch conversions
 
 5. **Timestamp/DTS Issues Fix** ✅
    * ✅ Handle "non monotonically increasing dts" errors
    * ✅ Add proper timestamp correction for problematic MKV files
-   * ✅ Implement -fflags +genpts option for problematic inputs
+   * ✅ Implement `-fflags +genpts` in `convert_media.py` (not only in unused helper)
    * ✅ Add container format compatibility checks
 
-6. **NVENC Resolution Compatibility** ✅
-   * ✅ Implement smart handling of attached images in media files
-   * ✅ Add stream-specific encoding based on resolution checks
-   * ✅ Handle attached pictures below NVENC minimum resolution
-   * ✅ Optimize encoder selection for embedded media
-   
-   **Implementation details:**
-   * ✅ Added probing of input files to identify attached pictures
-   * ✅ Implemented resolution checking against NVENC minimum requirements (256x256)
-   * ✅ Modified stream mapping to copy small image attachments instead of failing
-   * ✅ Added fallback to software encoding for specific streams when necessary
-   * ✅ Maintained hardware acceleration for main video and large attachments
-   * ✅ Added detailed logging to inform users when streams are copied due to size limitations
-   * ✅ Implemented robust error handling with graceful fallbacks
+6. **NVENC Resolution Compatibility** (partial — not in main conversion path)
+   * Handle attached pictures / streams below NVENC minimum resolution (256×256)
+   * Add stream-specific encoding: copy small attachments, NVENC for main video
+   * *Note: `build_ffmpeg_command()` has MKV genpts logic; per-stream NVENC copy/fallback is not wired into `convert_file()` yet.*
 
 7. **Documentation** ✅
    * ✅ Created comprehensive README.md with usage instructions
    * ✅ Added MIT license file
    * ✅ Included troubleshooting section with common issues
    * ✅ Documented command line parameters and workflow
+   * Update README for `--skip-subtitles`, `--hw-preset`, and `ffmpeg_utils` module
 
 8. **AV1 Support** ✅
-   * ✅ Add support for NVENC AV1 encoding
+   * ✅ Add support for NVENC AV1 encoding (benchmark tooling)
    * ✅ Add proper presets for AV1 encoder
    * ✅ Enable quality comparison with VMAF for AV1
 
@@ -76,17 +84,18 @@
     * ✅ Implemented archive mode with higher quality settings
     * ✅ Added benchmark-based quality presets for archival storage
     * ✅ Adjusted CQ values based on benchmark results for NVENC
+    * ✅ `convert_to_h265.py` passes `--archive` and `--hw-preset`
 
-Modify benchmark_presets.py:
-✅ Add preset p6 to the NVENC presets list
-Create a new testing function specifically for your targeted preset/CQ combinations
-Add a new command-line option to run this targeted test
-Run Benchmarks:
-Test the specific combinations (p4/p5/p6 with CQ 26/27/28)
-Analyze results for the best quality/speed/size balance
-Update convert_media.py:
-✅ Modify to use -cq instead of -qp for NVENC
-✅ Set default values based on benchmark results
-✅ Add archive-specific quality adjustment
-Update convert_to_h265.py:
-✅ Modify to support passing NVENC parameters when --archive --hardware is used
+## Future / Nice-to-Have
+
+* Merge or deprecate `media_processor.py` in favor of the `convert_to_h265` pipeline
+* Implement NVENC attached-picture / low-resolution stream handling in `convert_file()`
+* Add automated tests (manifest validation, path checks, ffmpeg command building)
+* README: document `--verbose` on `media_processor.py`
+* Consider `--skip-subtitles` in dry-run scan output when subtitles are detected
+
+## Completed Benchmark / NVENC Tuning Notes
+
+* ✅ `benchmark_presets.py`: NVENC preset p6, CQ sweep functions
+* ✅ `convert_media.py`: use `-cq` instead of `-qp` for NVENC
+* ✅ Archive-specific quality adjustment (`--archive`)
