@@ -152,6 +152,10 @@ def check_space_cli(
     return check_disk_space(str(manifest_path), min_free_gb, output_ratio)
 
 
-def run_convert(manifest_path: Path | str, options: ConversionOptions) -> int:
+def run_convert(
+    manifest_path: Path | str,
+    options: ConversionOptions,
+    on_progress: Callable[[int, int, bool], None] | None = None,
+) -> int:
     """Run conversion workflow step. Returns process exit code."""
-    return run_conversion(manifest_path, options)
+    return run_conversion(manifest_path, options, on_progress=on_progress)

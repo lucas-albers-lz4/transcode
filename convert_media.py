@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +39,29 @@ from ffmpeg_utils import (
 
 # Global for tracking current process
 current_process = None
+cancel_requested = False
+CONVERSION_CANCELLED = 2
+
+
+def reset_cancel() -> None:
+    """Clear a prior cancellation request."""
+    global cancel_requested
+    cancel_requested = False
+
+
+def request_cancel() -> None:
+    """Stop the in-flight ffmpeg process and end the conversion run."""
+    global cancel_requested, current_process
+    cancel_requested = True
+    proc = current_process
+    if proc is None or proc.poll() is not None:
+        return
+    print("\nCancelling conversion…")
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 def signal_handler(signum, frame):
@@ -114,6 +138,9 @@ def convert_file(
 ) -> bool:
     """Convert a single file to h265 with proper audio handling"""
     global current_process
+
+    if cancel_requested:
+        return False
 
     # Create output directory
     output_dir = os.path.dirname(output_path)
@@ -383,6 +410,10 @@ def convert_file(
             last_stderr_index = 0
 
             while current_process.poll() is None:
+                if cancel_requested:
+                    current_process.terminate()
+                    break
+
                 ready, _, _ = select.select([current_process.stdout], [], [], 1.0)
 
                 if ready:
@@ -670,7 +701,11 @@ class ConversionOptions:
         )
 
 
-def run_conversion(manifest_path: str | Path, options: ConversionOptions) -> int:
+def run_conversion(
+    manifest_path: str | Path,
+    options: ConversionOptions,
+    on_progress: Callable[[int, int, bool], None] | None = None,
+) -> int:
     """Convert files listed in manifest. Returns 0 on success, 1 on failure."""
     if not check_ffmpeg_dependencies(warn_nvenc=True):
         return 1
@@ -699,6 +734,7 @@ def run_conversion(manifest_path: str | Path, options: ConversionOptions) -> int
         files = files[: options.max_files]
 
     setup_signal_handlers()
+    reset_cancel()
 
     success_count = 0
     fail_count = 0
@@ -712,14 +748,28 @@ def run_conversion(manifest_path: str | Path, options: ConversionOptions) -> int
     )
 
     print(f"Starting conversion of {len(files)} files")
+    total_files = len(files)
+
+    if on_progress:
+        on_progress(0, total_files, True)
 
     for i, file_info in enumerate(files):
+        if cancel_requested:
+            print(
+                f"\nConversion cancelled. {success_count} file(s) completed; "
+                "re-run to continue.",
+            )
+            return CONVERSION_CANCELLED
+
         print(f"\n[{i + 1}/{len(files)}] Processing file")
 
         is_readable, error_msg = verify_file_readable(file_info["input_path"])
         if not is_readable:
             logging.error(error_msg)
             continue
+
+        if on_progress:
+            on_progress(success_count + fail_count, total_files, True)
 
         success = convert_file(
             file_info["input_path"],
@@ -738,10 +788,20 @@ def run_conversion(manifest_path: str | Path, options: ConversionOptions) -> int
             encode_profile=options.encode_profile,
         )
 
+        if cancel_requested:
+            print(
+                f"\nConversion cancelled. {success_count} file(s) completed; "
+                "re-run to continue.",
+            )
+            return CONVERSION_CANCELLED
+
         if success:
             success_count += 1
         else:
             fail_count += 1
+
+        if on_progress:
+            on_progress(success_count + fail_count, total_files, False)
 
     print(f"\nConversion complete: {success_count} succeeded, {fail_count} failed")
     if fail_count > 0:

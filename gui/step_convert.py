@@ -19,10 +19,11 @@ MIN_FREE_SLIDER_MAX_GB = 50.0
 
 
 class StepConvert(ctk.CTkFrame):
-    def __init__(self, master, on_back, on_start, **kwargs):
+    def __init__(self, master, on_back, on_start, on_cancel, **kwargs):
         super().__init__(master, **kwargs)
         self.on_back = on_back
         self.on_start = on_start
+        self.on_cancel = on_cancel
         self.selected_profile = ctk.StringVar(value=DEFAULT_PROFILE)
         self._profile_frames: dict[str, ctk.CTkFrame] = {}
         self._profile_space_labels: dict[str, ctk.CTkLabel] = {}
@@ -331,6 +332,11 @@ class StepConvert(ctk.CTkFrame):
             return
         self.on_start(profile, self._current_min_free_gb())
 
+    def _handle_cancel(self) -> None:
+        self.start_btn.configure(state="disabled")
+        self.set_status("Cancelling…")
+        self.on_cancel()
+
     def set_converting(self, converting: bool) -> None:
         self._is_converting = converting
         state = "disabled" if converting else "normal"
@@ -341,16 +347,30 @@ class StepConvert(ctk.CTkFrame):
                 if isinstance(widget, ctk.CTkRadioButton):
                     widget.configure(state=state)
         if converting:
-            self.start_btn.configure(state="disabled")
+            self.start_btn.configure(
+                state="normal",
+                text="Cancel",
+                command=self._handle_cancel,
+            )
             self.progress.pack(fill="x", padx=24, pady=4, after=self.status_label)
             self.progress.start()
         else:
+            self.start_btn.configure(
+                text="Start conversion",
+                command=self._handle_start,
+            )
             self.progress.stop()
             self.progress.pack_forget()
             self._update_space_display()
 
     def set_status(self, text: str) -> None:
         self.status_label.configure(text=text)
+
+    def set_convert_progress(self, completed: int, total: int, converting: bool) -> None:
+        if converting and completed < total:
+            self.set_status(f"Converting… {completed} / {total} completed")
+        else:
+            self.set_status(f"{completed} / {total} completed")
 
     def set_log_buffer(self, lines: list[str]) -> None:
         self._log_buffer = list(lines)
@@ -365,8 +385,6 @@ class StepConvert(ctk.CTkFrame):
         self.log_box.insert("end", line + "\n")
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
-        if "Processing file" in line or "Converting:" in line:
-            self.set_status(line.strip())
 
     def _write_log_buffer(self) -> None:
         self.log_box.configure(state="normal")
@@ -381,6 +399,13 @@ class StepConvert(ctk.CTkFrame):
             self.set_status("Finished — conversion completed successfully.")
         else:
             self.set_status("Finished — some files failed. See details for more info.")
+        self.open_btn.configure(state="normal")
+
+    def set_cancelled(self, output_dir: str) -> None:
+        self._output_dir = output_dir
+        self.set_status(
+            "Cancelled — finished files are saved. Start again to continue where you left off.",
+        )
         self.open_btn.configure(state="normal")
 
     def _toggle_details(self) -> None:

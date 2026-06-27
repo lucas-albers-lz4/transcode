@@ -10,6 +10,7 @@ from queue import Empty, Queue
 
 import customtkinter as ctk
 
+from convert_media import request_cancel
 from gui.ffmpeg_gate import ffmpeg_available, ffmpeg_install_hint
 from gui.step_convert import StepConvert
 from gui.step_folders import StepFolders
@@ -57,6 +58,7 @@ class TranscodeApp(ctk.CTk):
             self.container,
             on_back=self._show_folders,
             on_start=self._start_convert,
+            on_cancel=self._cancel_convert,
         )
 
         self._show_folders()
@@ -138,6 +140,9 @@ class TranscodeApp(ctk.CTk):
         )
         self._worker.start()
 
+    def _cancel_convert(self) -> None:
+        request_cancel()
+
     def _poll_queue(self) -> None:
         try:
             while True:
@@ -163,6 +168,13 @@ class TranscodeApp(ctk.CTk):
                     int(payload["checked"]),
                     int(payload["found"]),
                 )
+        elif event == "convert_progress":
+            if self.step_convert.winfo_ismapped():
+                self.step_convert.set_convert_progress(
+                    int(payload["completed"]),
+                    int(payload["total"]),
+                    bool(payload["converting"]),
+                )
         elif event == "scan_done":
             self.step_folders.set_busy(False, "")
             data = payload
@@ -184,6 +196,9 @@ class TranscodeApp(ctk.CTk):
             self.step_convert.set_converting(False)
             info = payload
             self.step_convert.set_done(info["exit_code"], info["output_dir"])
+        elif event == "convert_cancelled":
+            self.step_convert.set_converting(False)
+            self.step_convert.set_cancelled(payload["output_dir"])
         elif event == "error":
             if self.step_convert.winfo_ismapped():
                 self.step_convert.set_converting(False)

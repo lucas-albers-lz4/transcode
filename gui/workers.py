@@ -7,6 +7,7 @@ from queue import Queue
 
 import psutil
 
+from convert_media import CONVERSION_CANCELLED, reset_cancel
 from encode_profiles import DEFAULT_PROFILE, PROFILES, get_profile
 from gui.log_redirect import redirect_output
 from workflow import (
@@ -85,6 +86,7 @@ def worker_convert(
 ) -> None:
     """Check disk space and run conversion."""
     try:
+        reset_cancel()
         profile = get_profile(profile_name)
         space = check_space_for_profile(manifest_path, profile, min_free_gb=min_free_gb)
         if not space.ok:
@@ -93,8 +95,25 @@ def worker_convert(
 
         queue.put(("status", "Starting conversion…"))
         options = conversion_options_for_profile(profile_name)
+
+        def report_progress(completed: int, total: int, converting: bool) -> None:
+            queue.put(
+                (
+                    "convert_progress",
+                    {"completed": completed, "total": total, "converting": converting},
+                ),
+            )
+
         with redirect_output(queue):
-            code = run_convert(manifest_path, options)
+            code = run_convert(manifest_path, options, on_progress=report_progress)
+        if code == CONVERSION_CANCELLED:
+            queue.put(
+                (
+                    "convert_cancelled",
+                    {"output_dir": str(output_dir)},
+                ),
+            )
+            return
         queue.put(
             (
                 "convert_done",
