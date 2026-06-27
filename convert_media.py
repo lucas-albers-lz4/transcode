@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -750,6 +751,103 @@ def validate_manifest_paths(manifest):
     return True, None
 
 
+@dataclass
+class ConversionOptions:
+    crf: int = 24
+    hardware: bool = False
+    dry_run: bool = False
+    max_files: int = 0
+    debug: bool = False
+    archive: bool = False
+    hw_preset: str | None = None
+    skip_subtitles: bool = False
+
+    @classmethod
+    def from_namespace(cls, args: argparse.Namespace) -> "ConversionOptions":
+        return cls(
+            crf=args.crf,
+            hardware=args.hardware,
+            dry_run=args.dry_run,
+            max_files=args.max_files,
+            debug=args.debug,
+            archive=args.archive,
+            hw_preset=args.hw_preset,
+            skip_subtitles=args.skip_subtitles,
+        )
+
+
+def run_conversion(manifest_path: str | Path, options: ConversionOptions) -> int:
+    """Convert files listed in manifest. Returns 0 on success, 1 on failure."""
+    if not check_ffmpeg_dependencies(warn_nvenc=True):
+        return 1
+
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Error loading manifest: {exc}")
+        return 1
+
+    is_valid, error_msg = validate_manifest_paths(manifest)
+    if not is_valid:
+        print(f"Error: Invalid manifest: {error_msg}")
+        return 1
+
+    log_file = setup_logging(manifest["output_dir"])
+
+    files = manifest["files"]
+    files = [
+        file
+        for file in files
+        if Path(file["input_path"]).suffix.lower() in MEDIA_EXTENSIONS
+    ]
+    if options.max_files > 0:
+        files = files[: options.max_files]
+
+    setup_signal_handlers()
+
+    success_count = 0
+    fail_count = 0
+
+    print(
+        f"CRF: {options.crf}, Hardware: {options.hardware}, Dry Run: {options.dry_run}, "
+        f"Debug: {options.debug}, Archive: {options.archive}, HW Preset: {options.hw_preset}, "
+        f"Skip Subtitles: {options.skip_subtitles}",
+    )
+
+    print(f"Starting conversion of {len(files)} files")
+
+    for i, file_info in enumerate(files):
+        print(f"\n[{i + 1}/{len(files)}] Processing file")
+
+        is_readable, error_msg = verify_file_readable(file_info["input_path"])
+        if not is_readable:
+            logging.error(error_msg)
+            continue
+
+        success = convert_file(
+            file_info["input_path"],
+            file_info["output_path"],
+            crf=options.crf,
+            use_hardware=options.hardware,
+            dry_run=options.dry_run,
+            debug=options.debug,
+            archive=options.archive,
+            hw_preset=options.hw_preset,
+            skip_subtitles=options.skip_subtitles,
+        )
+
+        if success:
+            success_count += 1
+        else:
+            fail_count += 1
+
+    print(f"\nConversion complete: {success_count} succeeded, {fail_count} failed")
+    if fail_count > 0:
+        run_error_analysis(log_file)
+    return 0 if fail_count == 0 else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description="Convert media files to h265")
     parser.add_argument("manifest", help="Conversion manifest file")
@@ -793,78 +891,7 @@ def main():
     )
     args = parser.parse_args()
 
-    if not check_ffmpeg_dependencies(warn_nvenc=True):
-        return 1
-
-    # Load manifest
-    try:
-        with open(args.manifest) as f:
-            manifest = json.load(f)
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"Error loading manifest: {exc}")
-        return 1
-
-    is_valid, error_msg = validate_manifest_paths(manifest)
-    if not is_valid:
-        print(f"Error: Invalid manifest: {error_msg}")
-        return 1
-
-    log_file = setup_logging(manifest["output_dir"])
-
-    files = manifest["files"]
-    files = [
-        file
-        for file in files
-        if Path(file["input_path"]).suffix.lower() in MEDIA_EXTENSIONS
-    ]
-    if args.max_files > 0:
-        files = files[: args.max_files]
-
-    # Setup signal handlers
-    setup_signal_handlers()
-
-    # Process files
-    success_count = 0
-    fail_count = 0
-
-    print(
-        f"CRF: {args.crf}, Hardware: {args.hardware}, Dry Run: {args.dry_run}, "
-        f"Debug: {args.debug}, Archive: {args.archive}, HW Preset: {args.hw_preset}, "
-        f"Skip Subtitles: {args.skip_subtitles}",
-    )
-
-    print(f"Starting conversion of {len(files)} files")
-
-    for i, file_info in enumerate(files):
-        print(f"\n[{i + 1}/{len(files)}] Processing file")
-
-        # Add file permission check before attempting to process
-        is_readable, error_msg = verify_file_readable(file_info["input_path"])
-        if not is_readable:
-            logging.error(error_msg)
-            continue
-
-        success = convert_file(
-            file_info["input_path"],
-            file_info["output_path"],
-            crf=args.crf,
-            use_hardware=args.hardware,
-            dry_run=args.dry_run,
-            debug=args.debug,
-            archive=args.archive,
-            hw_preset=args.hw_preset,
-            skip_subtitles=args.skip_subtitles,
-        )
-
-        if success:
-            success_count += 1
-        else:
-            fail_count += 1
-
-    print(f"\nConversion complete: {success_count} succeeded, {fail_count} failed")
-    if fail_count > 0:
-        run_error_analysis(log_file)
-    return 0 if fail_count == 0 else 1
+    return run_conversion(args.manifest, ConversionOptions.from_namespace(args))
 
 
 if __name__ == "__main__":

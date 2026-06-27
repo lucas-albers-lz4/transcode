@@ -334,10 +334,51 @@ def format_analysis_table(analyses: dict[str, dict[str, Any]]) -> str:
     return table + legend
 
 
+OUTPUT_SIZE_RATIO = 0.6
+
+
+def _file_size_bytes(analysis: dict[str, Any]) -> int:
+    return int(analysis["current"]["filesize"])
+
+
+def _estimated_output_bytes(analysis: dict[str, Any]) -> int:
+    if analysis["recommended"]["codec"] == "current":
+        return _file_size_bytes(analysis)
+    return int(_file_size_bytes(analysis) * OUTPUT_SIZE_RATIO)
+
+
+def total_input_size(analyses: dict[str, dict[str, Any]]) -> float:
+    """Total source size in MB."""
+    return sum(_file_size_bytes(a) for a in analyses.values()) / (1024 * 1024)
+
+
+def total_estimated_output_size(analyses: dict[str, dict[str, Any]]) -> float:
+    """Estimate total output size in MB after conversion."""
+    return sum(_estimated_output_bytes(a) for a in analyses.values()) / (1024 * 1024)
+
+
 def total_estimated_savings(analyses: dict[str, dict[str, Any]]) -> float:
-    """Estimate total space savings in MB (40% heuristic)."""
-    return sum(
-        int(a["current"]["filesize"]) * 0.4 / (1024 * 1024) for a in analyses.values()
+    """Estimate total space savings in MB."""
+    return total_input_size(analyses) - total_estimated_output_size(analyses)
+
+
+def _format_size_mb(size_mb: float) -> str:
+    rounded = round(size_mb, 2)
+    if size_mb >= 1024:
+        return f"{rounded} MB ({size_mb / 1024:.2f} GB)"
+    return f"{rounded} MB"
+
+
+def format_space_summary(analyses: dict[str, dict[str, Any]]) -> str:
+    """Format source, output, and savings size estimates."""
+    input_mb = total_input_size(analyses)
+    output_mb = total_estimated_output_size(analyses)
+    savings_mb = total_estimated_savings(analyses)
+
+    return (
+        f"\nTotal source size: {_format_size_mb(input_mb)}"
+        f"\nTotal estimated output size: {_format_size_mb(output_mb)}"
+        f"\nTotal estimated space savings: {_format_size_mb(savings_mb)}"
     )
 
 

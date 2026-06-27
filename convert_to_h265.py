@@ -12,17 +12,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-
-def run_command(cmd, description):
-    """Run a command and handle errors."""
-    print(f"\n=== {description} ===")
-    print(f"Running: {' '.join(cmd)}")
-
-    result = subprocess.run(cmd)
-    if result.returncode != 0:
-        print(f"Error: {description} failed with code {result.returncode}")
-        return False
-    return True
+from analyze_space import check_disk_space
+from convert_media import ConversionOptions, run_conversion
+from scan_media import scan_and_write_manifest
 
 
 def run_analyze(
@@ -36,7 +28,7 @@ def run_analyze(
         analyze_batch,
         collect_files_for_analysis,
         format_analysis_table,
-        total_estimated_savings,
+        format_space_summary,
     )
 
     logging.basicConfig(
@@ -44,7 +36,6 @@ def run_analyze(
         format="%(levelname)s: %(message)s",
     )
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
     filepaths: list[str] = []
 
     if os.path.exists(manifest_path):
@@ -52,15 +43,8 @@ def run_analyze(
             manifest = json.load(f)
         filepaths = [entry["input_path"] for entry in manifest.get("files", [])]
     elif output_dir is not None:
-        scan_cmd = [
-            sys.executable,
-            os.path.join(script_dir, "scan_media.py"),
-            str(input_dir),
-            str(output_dir),
-            "--manifest",
-            manifest_path,
-        ]
-        if not run_command(scan_cmd, "Scanning media files"):
+        print("\n=== Scanning media files ===")
+        if scan_and_write_manifest(input_dir, output_dir, manifest_path) != 0:
             return 1
         with open(manifest_path) as f:
             manifest = json.load(f)
@@ -88,9 +72,7 @@ def run_analyze(
 
     print("\nMedia Analysis Summary:")
     print(format_analysis_table(analyses))
-    print(
-        f"\nTotal estimated space savings: {round(total_estimated_savings(analyses), 2)} MB",
-    )
+    print(format_space_summary(analyses))
     return 0
 
 
@@ -228,56 +210,37 @@ def main():
         return 1
 
     if not args.manifest:
-        scan_cmd = [
-            sys.executable,
-            os.path.join(script_dir, "scan_media.py"),
-            str(input_dir),
-            str(output_dir),
-            "--manifest",
-            manifest_path,
-        ]
-        if args.dry_run:
-            scan_cmd.append("--check-permissions")
-        if not run_command(scan_cmd, "Scanning media files"):
+        print("\n=== Scanning media files ===")
+        if (
+            scan_and_write_manifest(
+                input_dir,
+                output_dir,
+                manifest_path,
+                check_permissions=args.dry_run,
+            )
+            != 0
+        ):
             return 1
     elif not os.path.exists(manifest_path):
         print(f"Error: Specified manifest not found: {manifest_path}")
         return 1
 
-    space_cmd = [
-        sys.executable,
-        os.path.join(script_dir, "analyze_space.py"),
-        manifest_path,
-        "--min-free",
-        str(args.min_free_space),
-    ]
-    if not run_command(space_cmd, "Checking disk space"):
+    print("\n=== Checking disk space ===")
+    if not check_disk_space(manifest_path, args.min_free_space):
         return 1
 
-    convert_cmd = [
-        sys.executable,
-        os.path.join(script_dir, "convert_media.py"),
-        manifest_path,
-        "--crf",
-        str(args.crf),
-    ]
-
-    if args.hardware:
-        convert_cmd.append("--hardware")
-    if args.dry_run:
-        convert_cmd.append("--dry-run")
-    if args.max_files > 0:
-        convert_cmd.extend(["--max-files", str(args.max_files)])
-    if args.debug:
-        convert_cmd.append("--debug")
-    if args.archive:
-        convert_cmd.append("--archive")
-    if args.skip_subtitles:
-        convert_cmd.append("--skip-subtitles")
-    if args.hw_preset:
-        convert_cmd.extend(["--hw-preset", args.hw_preset])
-
-    if not run_command(convert_cmd, "Converting media files"):
+    print("\n=== Converting media files ===")
+    options = ConversionOptions(
+        crf=args.crf,
+        hardware=args.hardware,
+        dry_run=args.dry_run,
+        max_files=args.max_files,
+        debug=args.debug,
+        archive=args.archive,
+        hw_preset=args.hw_preset,
+        skip_subtitles=args.skip_subtitles,
+    )
+    if run_conversion(manifest_path, options) != 0:
         return 1
 
     print("\nConversion workflow completed successfully!")

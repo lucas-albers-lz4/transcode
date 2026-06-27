@@ -127,7 +127,7 @@ Compare software vs hardware encoding on one file:
 
 ## Workflow
 
-The default conversion workflow:
+The default conversion workflow (orchestrated in-process by `convert_to_h265.py`):
 
 1. Scan input directory for media files (`scan_media.py`)
 2. Generate conversion manifest
@@ -136,7 +136,7 @@ The default conversion workflow:
 5. Verify integrity of output files
 6. Run error analysis on failures (`analyze_errors.py`)
 
-Shared helpers live in `ffmpeg_utils.py`. Analysis reporting is in `media_analysis.py`.
+Each step also remains runnable as a standalone script for debugging or partial reruns. Shared helpers live in `ffmpeg_utils.py`. Analysis reporting is in `media_analysis.py`.
 
 ## Troubleshooting
 

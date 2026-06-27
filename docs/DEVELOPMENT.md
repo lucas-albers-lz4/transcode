@@ -232,6 +232,7 @@ Baseline artifacts: [`docs/ruff-all-stats.txt`](ruff-all-stats.txt), [`docs/ruff
   * Linux: Using NVIDIA NVENC encoder with graceful fallback to software
 * **Hardware Acceleration Fallback**: The system now properly detects when FFmpeg lacks NVENC support and falls back to software encoding with helpful instructions
 * **Directory Creation and Permission Handling**: The system now properly creates output directories with error handling and validates write permissions before starting transcoding.
+* **Orchestration**: `convert_to_h265.py` calls scan, space-check, and convert steps via direct imports; each worker script remains runnable standalone.
 
 ## Notes related to current code:
 ### Core Functionality Gaps

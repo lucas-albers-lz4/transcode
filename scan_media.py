@@ -179,6 +179,52 @@ def check_hw_encoders():
         return {"h264_videotoolbox": False, "hevc_videotoolbox": False}
 
 
+def scan_and_write_manifest(
+    input_dir: Path,
+    output_dir: Path,
+    manifest_path: str | Path,
+    *,
+    check_permissions: bool = False,
+) -> int:
+    """Scan input_dir, write manifest JSON. Returns 0 on success, 1 on failure."""
+    if not check_ffmpeg_dependencies():
+        return 1
+
+    input_dir = input_dir.resolve()
+    output_dir = output_dir.resolve()
+
+    if not input_dir.exists() or not input_dir.is_dir():
+        print(f"Error: Input directory not found: {input_dir}")
+        return 1
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Scanning directory: {input_dir}")
+    files = find_media_files(input_dir, output_dir, check_permissions)
+
+    total_size_bytes = sum(f["size"] for f in files)
+    total_size_gb = total_size_bytes / (1024**3)
+
+    print(f"Found {len(files)} files to convert")
+    print(f"Total size: {total_size_gb:.2f} GB")
+
+    with open(manifest_path, "w") as f:
+        json.dump(
+            {
+                "input_dir": str(input_dir),
+                "output_dir": str(output_dir),
+                "files": files,
+                "total_size_bytes": total_size_bytes,
+                "total_files": len(files),
+            },
+            f,
+            indent=2,
+        )
+
+    print(f"Manifest written to {manifest_path}")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Scan for media files to convert")
     parser.add_argument("input_dir", help="Input directory to scan")
@@ -195,42 +241,12 @@ def main():
     )
     args = parser.parse_args()
 
-    if not check_ffmpeg_dependencies():
-        return 1
-
-    input_dir = Path(args.input_dir).resolve()
-    output_dir = Path(args.output_dir).resolve()
-
-    if not input_dir.exists() or not input_dir.is_dir():
-        print(f"Error: Input directory not found: {input_dir}")
-        return 1
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"Scanning directory: {input_dir}")
-    files = find_media_files(input_dir, output_dir, args.check_permissions)
-
-    total_size_bytes = sum(f["size"] for f in files)
-    total_size_gb = total_size_bytes / (1024**3)
-
-    print(f"Found {len(files)} files to convert")
-    print(f"Total size: {total_size_gb:.2f} GB")
-
-    with open(args.manifest, "w") as f:
-        json.dump(
-            {
-                "input_dir": str(input_dir),
-                "output_dir": str(output_dir),
-                "files": files,
-                "total_size_bytes": total_size_bytes,
-                "total_files": len(files),
-            },
-            f,
-            indent=2,
-        )
-
-    print(f"Manifest written to {args.manifest}")
-    return 0
+    return scan_and_write_manifest(
+        Path(args.input_dir),
+        Path(args.output_dir),
+        args.manifest,
+        check_permissions=args.check_permissions,
+    )
 
 
 if __name__ == "__main__":
