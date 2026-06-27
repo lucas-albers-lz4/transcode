@@ -13,7 +13,7 @@ import customtkinter as ctk
 from gui.ffmpeg_gate import ffmpeg_available, ffmpeg_install_hint
 from gui.step_convert import StepConvert
 from gui.step_folders import StepFolders
-from gui.theme import TEXT, apply_widget_styles
+from gui.theme import TEXT, apply_widget_styles, step_header_font
 from gui.workers import worker_convert, worker_scan
 
 
@@ -69,7 +69,7 @@ class TranscodeApp(ctk.CTk):
         ctk.CTkLabel(
             frame,
             text="FFmpeg required",
-            font=ctk.CTkFont(size=22, weight="bold"),
+            font=step_header_font(size=22),
             text_color=TEXT,
         ).pack(anchor="w", pady=(0, 12))
 

@@ -5,7 +5,14 @@ from __future__ import annotations
 import customtkinter as ctk
 
 from encode_profiles import DEFAULT_PROFILE, PROFILE_NAMES
-from gui.theme import TEXT, TEXT_ERROR, TEXT_LINK, TEXT_OK, TEXT_SECONDARY
+from gui.theme import (
+    TEXT,
+    TEXT_ERROR,
+    TEXT_LINK,
+    TEXT_OK,
+    TEXT_SECONDARY,
+    step_header_font,
+)
 
 DEFAULT_MIN_FREE_GB = 10.0
 MIN_FREE_SLIDER_MAX_GB = 50.0
@@ -55,7 +62,7 @@ class StepConvert(ctk.CTkFrame):
         self.header = ctk.CTkLabel(
             self.body,
             text="Step 2 of 2 — Choose quality",
-            font=ctk.CTkFont(size=20, weight="bold"),
+            font=step_header_font(),
             text_color=TEXT,
         )
         self.header.pack(anchor="w", padx=24, pady=(24, 8))
@@ -209,10 +216,12 @@ class StepConvert(ctk.CTkFrame):
 
         if selected_ok:
             required = self._required_gb(selected)
+            time_display = self._scan_data["estimates"][selected]["time_display"]
             self.space_status_label.configure(
                 text=(
                     f"Enough space for {selected.title()}: "
-                    f"~{required:.1f} GB needed, {self._free_gb:.1f} GB available."
+                    f"~{required:.1f} GB needed, {self._free_gb:.1f} GB available.\n"
+                    f"Time to complete: ~{time_display}"
                 ),
                 text_color=TEXT_OK,
             )

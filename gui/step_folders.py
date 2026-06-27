@@ -7,7 +7,7 @@ from tkinter import filedialog
 
 import customtkinter as ctk
 
-from gui.theme import TEXT, TEXT_MUTED
+from gui.theme import TEXT, TEXT_MUTED, step_header_font
 
 
 class StepFolders(ctk.CTkFrame):
@@ -20,7 +20,7 @@ class StepFolders(ctk.CTkFrame):
         ctk.CTkLabel(
             self,
             text="Step 1 of 2 — Choose folders",
-            font=ctk.CTkFont(size=20, weight="bold"),
+            font=step_header_font(),
             text_color=TEXT,
         ).pack(anchor="w", padx=24, pady=(24, 8))
 
