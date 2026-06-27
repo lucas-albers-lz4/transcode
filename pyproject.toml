@@ -8,9 +8,38 @@ include = '\.pyi?$'
 line-length = 88  # Same as black
 
 [tool.ruff.lint]
-# Enable pycodestyle (`E`), Pyflakes (`F`), and import sorting (`I`)
-select = ["E", "F", "I"]
-ignore = ["E501"]  # Ignore line length errors as they're handled by the formatter
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "I",   # isort
+  "UP",  # pyupgrade (modern typing/syntax)
+  "B",   # flake8-bugbear
+  "BLE", # blind except
+  "RUF", # ruff-specific
+  "COM", # trailing commas
+]
+ignore = [
+  "E501",    # Black handles line length
+  "T201",    # CLI tools intentionally use print for user output
+  "S603",    # subprocess: ffmpeg/ffprobe invocation is core behavior
+  "S607",    # partial executable paths for ffmpeg/ffprobe
+  "FBT001",  # boolean positional args are idiomatic for argparse CLIs
+  "FBT002",  # boolean default positional args match existing API
+  "PLW0603", # global needed for signal-handler process tracking
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "S101",   # pytest uses assert
+  "INP001", # tests import via pythonpath, not package layout
+  "D103",   # test functions don't need docstrings
+]
+"**/benchmark_presets.py" = [
+  "PLR0912", # benchmark main has many branches by design
+  "PLR0915", # benchmark main is long by design
+  "C901",    # benchmark orchestration is inherently complex
+  "S108",    # temp/output paths under benchmark_results are intentional
+]
 
 # Allow autofix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]
@@ -30,3 +59,7 @@ force_grid_wrap = 0
 use_parentheses = true
 ensure_newline_before_comments = true
 line_length = 88
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

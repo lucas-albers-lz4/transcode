@@ -25,3 +25,4 @@ wheels/
 media_analysis.json
 conversion_manifest.json
 venv/*
+.venv/
