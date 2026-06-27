@@ -5,148 +5,123 @@ Outputs a JSON manifest of files to be processed.
 
 import argparse
 import json
-import subprocess
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
+from ffmpeg_utils import (
+    check_ffmpeg_dependencies,
+    get_media_duration,
+    is_h265_encoded,
+    is_media_file,
+    path_within_root,
+    probe_media,
+)
 
-def is_media_file(path: Path) -> bool:
-    """Check if file is a media file by extension."""
-    return path.suffix.lower() in ['.mp4', '.mkv', '.avi', '.mov']
-
-def is_h265_encoded(filepath: Path) -> bool:
-    """Check if file is already h265 encoded."""
-    try:
-        result = subprocess.run([
-            'ffprobe', '-v', 'error', 
-            '-select_streams', 'v:0',
-            '-show_entries', 'stream=codec_name',
-            '-of', 'default=noprint_wrappers=1:nokey=1',
-            str(filepath)
-        ], capture_output=True, text=True)
-        
-        codec = result.stdout.strip().lower()
-        return codec in ['hevc', 'h265']
-    except Exception as e:
-        print(f"Error checking codec for {filepath}: {e}")
-        return False
 
 def get_media_info(filepath: Path) -> dict:
-    """Get detailed media file information."""
+    """Get detailed media file information from a single ffprobe call."""
     info = {
         "video_codec": "unknown",
         "audio_codec": "unknown",
         "audio_channels": 0,
         "audio_bitrate": "unknown",
         "duration": 0,
-        "resolution": "unknown"
+        "resolution": "unknown",
     }
-    
-    try:
-        # Get video info
-        video_result = subprocess.run([
-            'ffprobe', '-v', 'error',
-            '-select_streams', 'v:0',
-            '-show_entries', 'stream=codec_name,width,height',
-            '-of', 'json',
-            str(filepath)
-        ], capture_output=True, text=True)
-        
-        video_data = json.loads(video_result.stdout)
-        if 'streams' in video_data and video_data['streams']:
-            stream = video_data['streams'][0]
-            info["video_codec"] = stream.get('codec_name', 'unknown')
-            if 'width' in stream and 'height' in stream:
-                info["resolution"] = f"{stream['width']}x{stream['height']}"
-        
-        # Get audio info
-        audio_result = subprocess.run([
-            'ffprobe', '-v', 'error',
-            '-select_streams', 'a:0',
-            '-show_entries', 'stream=codec_name,channels,bit_rate',
-            '-of', 'json',
-            str(filepath)
-        ], capture_output=True, text=True)
-        
-        audio_data = json.loads(audio_result.stdout)
-        if 'streams' in audio_data and audio_data['streams']:
-            stream = audio_data['streams'][0]
-            info["audio_codec"] = stream.get('codec_name', 'unknown')
-            info["audio_channels"] = int(stream.get('channels', 0))
-            if 'bit_rate' in stream and stream['bit_rate'].isdigit():
-                bitrate = int(stream['bit_rate'])
-                info["audio_bitrate"] = f"{bitrate//1000}k"
-        
-        # Get duration
-        format_result = subprocess.run([
-            'ffprobe', '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1',
-            str(filepath)
-        ], capture_output=True, text=True)
-        
-        if format_result.stdout.strip():
-            info["duration"] = float(format_result.stdout.strip())
-            
+
+    data = probe_media(filepath)
+    if not data:
         return info
-        
-    except Exception as e:
-        print(f"Error getting media info for {filepath}: {e}")
-        return info
+
+    video_stream = None
+    audio_stream = None
+    for stream in data.get("streams", []):
+        if stream.get("codec_type") == "video" and not video_stream:
+            video_stream = stream
+        elif stream.get("codec_type") == "audio" and not audio_stream:
+            audio_stream = stream
+
+    if video_stream:
+        info["video_codec"] = video_stream.get("codec_name", "unknown")
+        width = video_stream.get("width")
+        height = video_stream.get("height")
+        if width and height:
+            info["resolution"] = f"{width}x{height}"
+
+    if audio_stream:
+        info["audio_codec"] = audio_stream.get("codec_name", "unknown")
+        info["audio_channels"] = int(audio_stream.get("channels", 0))
+        bit_rate = audio_stream.get("bit_rate", "")
+        if isinstance(bit_rate, str) and bit_rate.isdigit():
+            info["audio_bitrate"] = f"{int(bit_rate) // 1000}k"
+
+    duration = get_media_duration(filepath)
+    if duration is not None:
+        info["duration"] = duration
+    elif data.get("format", {}).get("duration"):
+        try:
+            info["duration"] = float(data["format"]["duration"])
+        except (TypeError, ValueError):
+            pass
+
+    return info
+
 
 def is_readable(filepath: Path) -> bool:
     """Check if file is readable."""
     try:
         return os.access(filepath, os.R_OK)
-    except Exception:
+    except OSError:
         return False
 
-def find_media_files(input_dir: Path, output_dir: Path, check_permissions: bool = False) -> List[Dict[str, Any]]:
+
+def find_media_files(
+    input_dir: Path,
+    output_dir: Path,
+    check_permissions: bool = False,
+) -> list[dict[str, Any]]:
     """
     Find all media files recursively that need conversion.
-    
-    Args:
-        input_dir: Directory to scan
-        output_dir: Directory for output files
-        check_permissions: If True, check if files are readable
-        
-    Returns:
-        List of dicts with file info
     """
     to_convert = []
     unreadable_files = []
-    
+
+    input_dir = input_dir.resolve()
+
     for filepath in input_dir.rglob("*"):
         if not filepath.is_file() or not is_media_file(filepath):
             continue
-            
+
+        if not path_within_root(filepath, input_dir):
+            print(f"Warning: Skipping path outside input directory: {filepath}")
+            continue
+
         rel_path = filepath.relative_to(input_dir)
         output_path = output_dir / rel_path
-        
-        # Check if file is readable when check_permissions is True
+
         if check_permissions and not is_readable(filepath):
             unreadable_files.append(str(rel_path))
             print(f"Warning: Cannot read file (permission denied): {rel_path}")
             continue
-            
-        # Skip already h265 files
+
         if is_h265_encoded(filepath):
             print(f"Skipping h265 file: {rel_path}")
             continue
-            
-        # Check for in-progress files
+
+        if output_path.exists() and output_path.stat().st_size > 0:
+            if is_h265_encoded(output_path):
+                print(f"Skipping existing HEVC output: {rel_path}")
+                continue
+
         temp_path = output_dir / f"{rel_path}.transcoding"
         if temp_path.exists():
             print(f"Skipping in-progress file: {rel_path}")
             continue
-            
-        # Get media information
+
         media_info = get_media_info(filepath)
-        
-        # Calculate output directory
         output_dir_path = output_path.parent
-        
+
         file_info = {
             "input_path": str(filepath),
             "output_path": str(output_path),
@@ -158,113 +133,120 @@ def find_media_files(input_dir: Path, output_dir: Path, check_permissions: bool 
             "audio_channels": media_info["audio_channels"],
             "audio_bitrate": media_info["audio_bitrate"],
             "resolution": media_info["resolution"],
-            "duration": media_info["duration"]
+            "duration": media_info["duration"],
         }
-        
-        print(f"Found: {rel_path} ({file_info['video_codec']}/{file_info['audio_codec']}, {file_info['resolution']})")
+
+        print(
+            f"Found: {rel_path} "
+            f"({file_info['video_codec']}/{file_info['audio_codec']}, {file_info['resolution']})",
+        )
         to_convert.append(file_info)
-    
-    # Report unreadable files if any were found
+
     if unreadable_files and check_permissions:
         print(f"\nWarning: Found {len(unreadable_files)} unreadable files:")
         for file in unreadable_files:
             print(f"  - {file}")
         print("\nYou may need to fix permissions before proceeding.")
-    
+
     return to_convert
 
+
 def check_hw_encoders():
-    """Check if hardware encoders are available"""
+    """Check if Apple VideoToolbox hardware encoders are available."""
+    import subprocess
+
     hw_encoders = {
-        'h264_videotoolbox': False,
-        'hevc_videotoolbox': False
+        "h264_videotoolbox": False,
+        "hevc_videotoolbox": False,
     }
-    
+
     try:
-        result = subprocess.run(['ffmpeg', '-encoders'], 
-                               capture_output=True, text=True, check=True)
-        
-        for line in result.stdout.split('\n'):
+        result = subprocess.run(
+            ["ffmpeg", "-encoders"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        for line in result.stdout.split("\n"):
             for encoder in hw_encoders:
                 if encoder in line:
                     hw_encoders[encoder] = True
-                    
-        return hw_encoders
-    except Exception:
-        return {'h264_videotoolbox': False, 'hevc_videotoolbox': False}
 
-def check_dependencies():
-    """Check if required dependencies (ffmpeg & ffprobe) are installed."""
-    dependencies = ['ffmpeg', 'ffprobe']
-    missing = []
-    
-    for cmd in dependencies:
-        try:
-            # Use 'which' on Unix-based systems to find the command location
-            result = subprocess.run(['which', cmd], 
-                                   capture_output=True, 
-                                   text=True)
-            if result.returncode != 0:
-                missing.append(cmd)
-        except Exception:
-            missing.append(cmd)
-    
-    if missing:
-        print(f"ERROR: Missing required dependencies: {', '.join(missing)}")
-        print("Please install ffmpeg with: sudo apt install ffmpeg (Ubuntu/Debian)")
-        print("                         or: sudo dnf install ffmpeg (Fedora)")
-        print("                         or: brew install ffmpeg (macOS)")
-        return False
-    
-    return True
+        return hw_encoders
+    except (subprocess.CalledProcessError, OSError):
+        return {"h264_videotoolbox": False, "hevc_videotoolbox": False}
+
+
+def scan_and_write_manifest(
+    input_dir: Path,
+    output_dir: Path,
+    manifest_path: str | Path,
+    *,
+    check_permissions: bool = False,
+) -> int:
+    """Scan input_dir, write manifest JSON. Returns 0 on success, 1 on failure."""
+    if not check_ffmpeg_dependencies():
+        return 1
+
+    input_dir = input_dir.resolve()
+    output_dir = output_dir.resolve()
+
+    if not input_dir.exists() or not input_dir.is_dir():
+        print(f"Error: Input directory not found: {input_dir}")
+        return 1
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Scanning directory: {input_dir}")
+    files = find_media_files(input_dir, output_dir, check_permissions)
+
+    total_size_bytes = sum(f["size"] for f in files)
+    total_size_gb = total_size_bytes / (1024**3)
+
+    print(f"Found {len(files)} files to convert")
+    print(f"Total size: {total_size_gb:.2f} GB")
+
+    with open(manifest_path, "w") as f:
+        json.dump(
+            {
+                "input_dir": str(input_dir),
+                "output_dir": str(output_dir),
+                "files": files,
+                "total_size_bytes": total_size_bytes,
+                "total_files": len(files),
+            },
+            f,
+            indent=2,
+        )
+
+    print(f"Manifest written to {manifest_path}")
+    return 0
+
 
 def main():
     parser = argparse.ArgumentParser(description="Scan for media files to convert")
     parser.add_argument("input_dir", help="Input directory to scan")
     parser.add_argument("output_dir", help="Output directory for converted files")
-    parser.add_argument("--manifest", default="conversion_manifest.json", 
-                        help="Output manifest file")
-    parser.add_argument("--check-permissions", action="store_true",
-                        help="Check if source files are readable")
+    parser.add_argument(
+        "--manifest",
+        default="conversion_manifest.json",
+        help="Output manifest file",
+    )
+    parser.add_argument(
+        "--check-permissions",
+        action="store_true",
+        help="Check if source files are readable",
+    )
     args = parser.parse_args()
-    
-    # Check for ffmpeg/ffprobe
-    if not check_dependencies():
-        return 1
-        
-    input_dir = Path(args.input_dir).resolve()
-    output_dir = Path(args.output_dir).resolve()
-    
-    if not input_dir.exists() or not input_dir.is_dir():
-        print(f"Error: Input directory not found: {input_dir}")
-        return 1
-        
-    # Create output directory if it doesn't exist
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Scan for files
-    print(f"Scanning directory: {input_dir}")
-    files = find_media_files(input_dir, output_dir, args.check_permissions)
-    
-    # Calculate total size
-    total_size_bytes = sum(f["size"] for f in files)
-    total_size_gb = total_size_bytes / (1024**3)
-    
-    print(f"Found {len(files)} files to convert")
-    print(f"Total size: {total_size_gb:.2f} GB")
-    
-    # Write manifest
-    with open(args.manifest, 'w') as f:
-        json.dump({
-            "input_dir": str(input_dir),
-            "output_dir": str(output_dir),
-            "files": files,
-            "total_size_bytes": total_size_bytes,
-            "total_files": len(files)
-        }, f, indent=2)
-    
-    print(f"Manifest written to {args.manifest}")
-    return 0
+
+    return scan_and_write_manifest(
+        Path(args.input_dir),
+        Path(args.output_dir),
+        args.manifest,
+        check_permissions=args.check_permissions,
+    )
+
 
 if __name__ == "__main__":
     exit(main())

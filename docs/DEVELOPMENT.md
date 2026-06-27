@@ -40,7 +40,16 @@ This document outlines the plan for adding a batch media conversion feature to c
 4. **convert_to_h265.py** ✅
    * Main controller script
    * Orchestrates the full workflow
-   * Handles CLI arguments
+   * Handles CLI arguments including `--analyze` and `--benchmark`
+
+5. **media_analysis.py** ✅
+   * Codec analysis and encode-method recommendations
+   * Analysis table with HW/SW time estimates
+   * Cached results under output directory
+
+6. **ffmpeg_utils.py** ✅
+   * Shared ffprobe/ffmpeg helpers, path checks, progress parsing
+   * HEVC validation and media probing
 
 ## Resumability and In-Flight Tracking ✅
 
@@ -89,6 +98,48 @@ This document outlines the plan for adding a batch media conversion feature to c
 *   `--manifest`: (Optional) Use existing manifest file
 *   `--min-free-space`: (Optional) Minimum free space to maintain (default: 10GB)
 *   `--max-files`: (Optional) Maximum number of files to process
+*   `--analyze`: (Optional) Analyze files without converting
+*   `--benchmark FILE`: (Optional) Quick HW vs SW benchmark on one file
+*   `--hw-preset`: (Optional) Hardware encoder preset
+*   `--skip-subtitles`: (Optional) Exclude subtitles from output
+
+## Linting (Ruff)
+
+Daily/CI lint uses the curated rule set in [`pyproject.toml`](../pyproject.toml) (`E`, `F`, `I`, `UP`, `B`, `BLE`, `RUF`, `COM`), not `--select ALL`.
+
+```bash
+ruff check .          # CI target — must pass with zero violations
+ruff format .
+pytest tests/ -q
+```
+
+Pre-commit runs `ruff` and `ruff-format` via [`.pre-commit-config.yaml`](../.pre-commit-config.yaml).
+
+### Audit baseline (`--select ALL`)
+
+Full-rule audits are for triage only; many findings are intentionally ignored (CLI `print`, subprocess/ffmpeg, docstrings, test `assert`).
+
+| Snapshot | Violations |
+|----------|----------:|
+| Pre-triage baseline | 817 |
+| After curated config + autofix + manual hygiene | 605 |
+
+Baseline artifacts: [`docs/ruff-all-stats.txt`](ruff-all-stats.txt), [`docs/ruff-all-baseline.json`](ruff-all-baseline.json).
+
+### Intentionally ignored (see `pyproject.toml`)
+
+- **T201** — CLI tools use `print` for user-facing output
+- **S603/S607** — spawning `ffmpeg`/`ffprobe` is core behavior
+- **FBT001/FBT002** — boolean `argparse` flags
+- **PLW0603** — signal-handler global in `convert_media.py`
+- **tests/** — S101, INP001, D103
+- **benchmark_presets.py** — complexity rules (PLR0912, PLR0915, C901), S108
+
+### Deferred follow-up (not required for CI)
+
+- **PTH*** — migrate `os.path` to `pathlib` incrementally (`convert_media.py`, `scan_media.py` first)
+- **ANN*** — add return/param types on CLI entrypoints only if adopting strict typing project-wide; library modules [`ffmpeg_utils.py`](../ffmpeg_utils.py) and [`media_analysis.py`](../media_analysis.py) already use typed public APIs
+- **PLR/C901** — reduce complexity in `convert_file()` via refactor, not lint-driven edits
 
 ## Future Enhancements
 
@@ -181,6 +232,7 @@ This document outlines the plan for adding a batch media conversion feature to c
   * Linux: Using NVIDIA NVENC encoder with graceful fallback to software
 * **Hardware Acceleration Fallback**: The system now properly detects when FFmpeg lacks NVENC support and falls back to software encoding with helpful instructions
 * **Directory Creation and Permission Handling**: The system now properly creates output directories with error handling and validates write permissions before starting transcoding.
+* **Orchestration**: `convert_to_h265.py` calls scan, space-check, and convert steps via direct imports; each worker script remains runnable standalone.
 
 ## Notes related to current code:
 ### Core Functionality Gaps

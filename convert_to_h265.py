@@ -1,132 +1,342 @@
 #!/usr/bin/env python3
 """
 Main controller script for h265 conversion workflow.
-Orchestrates scanning, space analysis, and conversion.
+Orchestrates scanning, space analysis, conversion, and analysis.
 """
 
 import argparse
+import json
+import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 
+from analyze_space import check_disk_space
+from convert_media import ConversionOptions, run_conversion
+from encode_profiles import (
+    DEFAULT_PROFILE,
+    EncodeProfile,
+    get_profile,
+    has_legacy_encode_flags,
+    profile_to_options_kwargs,
+    prompt_encode_profile,
+)
+from media_analysis import (
+    analyses_from_manifest,
+    analyze_batch,
+    estimate_all_profiles,
+)
+from scan_media import scan_and_write_manifest
 
-def run_command(cmd, description):
-    """Run a command and handle errors"""
-    print(f"\n=== {description} ===")
-    print(f"Running: {' '.join(cmd)}")
-    
-    result = subprocess.run(cmd)
-    if result.returncode != 0:
-        print(f"Error: {description} failed with code {result.returncode}")
-        return False
-    return True
+
+def run_analyze(
+    input_dir: Path,
+    output_dir: Path | None,
+    manifest_path: str,
+    verbose: bool,
+) -> int:
+    """Run analysis-only mode: scan, analyze, print report."""
+    from media_analysis import (
+        analyze_batch,
+        collect_files_for_analysis,
+        format_analysis_table,
+        format_space_summary,
+    )
+
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.WARNING,
+        format="%(levelname)s: %(message)s",
+    )
+
+    filepaths: list[str] = []
+
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        filepaths = [entry["input_path"] for entry in manifest.get("files", [])]
+    elif output_dir is not None:
+        print("\n=== Scanning media files ===")
+        if scan_and_write_manifest(input_dir, output_dir, manifest_path) != 0:
+            return 1
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        filepaths = [entry["input_path"] for entry in manifest.get("files", [])]
+    else:
+        filepaths = [str(p) for p in collect_files_for_analysis(input_dir)]
+
+    if not filepaths:
+        filepaths = [str(p) for p in collect_files_for_analysis(input_dir)]
+
+    if not filepaths:
+        print("No files to analyze.")
+        return 0
+
+    cache_file = (
+        output_dir / "media_analysis.json"
+        if output_dir
+        else Path.cwd() / "media_analysis.json"
+    )
+    analyses = analyze_batch(filepaths, cache_file=cache_file)
+
+    if not analyses:
+        print("No analysis results.")
+        return 1
+
+    print("\nMedia Analysis Summary:")
+    print(format_analysis_table(analyses))
+    print(format_space_summary(analyses))
+    return 0
+
+
+def run_benchmark(benchmark_file: str, duration: float, script_dir: str) -> int:
+    """Run a quick hardware vs software benchmark on a single file."""
+    if not os.path.isfile(benchmark_file):
+        print(f"Error: Benchmark file not found: {benchmark_file}")
+        return 1
+
+    cmd = [
+        sys.executable,
+        os.path.join(script_dir, "benchmark_presets.py"),
+        benchmark_file,
+        "--quick",
+        "--duration",
+        str(duration),
+    ]
+    return subprocess.run(cmd).returncode
+
+
+def resolve_conversion_options(
+    args: argparse.Namespace,
+    manifest_path: str,
+    output_dir: Path,
+) -> tuple[ConversionOptions, EncodeProfile | None]:
+    """Build ConversionOptions from CLI args, profile, or interactive selection."""
+    if has_legacy_encode_flags(args):
+        return ConversionOptions(
+            crf=args.crf,
+            hardware=args.hardware,
+            dry_run=args.dry_run,
+            max_files=args.max_files,
+            debug=args.debug,
+            archive=args.archive,
+            hw_preset=args.hw_preset,
+            skip_subtitles=args.skip_subtitles,
+        ), None
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    if not manifest.get("files"):
+        print("\nAll files already converted. Nothing to do.")
+        raise SystemExit(0)
+
+    analyses = analyses_from_manifest(manifest)
+    if not analyses:
+        print("Error: No analyzable media files found.")
+        raise SystemExit(1)
+
+    estimates = estimate_all_profiles(analyses)
+    profile_name = args.profile
+    if profile_name is None:
+        input_gb = estimates[DEFAULT_PROFILE].input_gb
+        profile_name = prompt_encode_profile(
+            len(analyses),
+            input_gb,
+            estimates,
+        )
+
+    profile = get_profile(profile_name)
+    estimate = estimates[profile_name]
+    kwargs = profile_to_options_kwargs(profile_name)
+    options = ConversionOptions(
+        dry_run=args.dry_run,
+        max_files=args.max_files,
+        debug=args.debug,
+        skip_subtitles=args.skip_subtitles,
+        **kwargs,
+    )
+    print(
+        f"\nUsing profile: {profile.label} ({estimate.encoder_summary}, "
+        f"~{estimate.time_display}, ~{estimate.output_gb:.1f} GB output)",
+    )
+    return options, profile
+
 
 def main():
     parser = argparse.ArgumentParser(description="Convert media files to h265")
     parser.add_argument("input_dir", help="Input directory containing media files")
-    parser.add_argument("output_dir", help="Output directory for converted files")
-    parser.add_argument("--crf", type=int, default=24, 
-                        help="CRF value (lower = better quality, default: 24, range: 18-28)")
-    parser.add_argument("--hardware", action="store_true", 
-                        help="Use hardware acceleration if available (default: False)")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Don't actually transcode, just simulate (default: False)")
-    parser.add_argument("--manifest", 
-                        help="Use existing manifest file instead of scanning (default: generates new manifest)")
-    parser.add_argument("--min-free-space", type=float, default=10.0,
-                        help="Minimum free space to maintain in GB (default: 10GB)")
-    parser.add_argument("--max-files", type=int, default=0,
-                        help="Maximum number of files to process (0 = all, default: 0)")
-    parser.add_argument("--debug", action="store_true",
-                        help="Show raw ffmpeg output instead of progress tracking")
-    parser.add_argument("--archive", action="store_true",
-                        help="Use higher compression settings for archival quality")
+    parser.add_argument(
+        "output_dir",
+        nargs="?",
+        default=None,
+        help="Output directory for converted files (optional with --analyze)",
+    )
+    parser.add_argument(
+        "--crf",
+        type=int,
+        default=24,
+        help="CRF value (lower = better quality, default: 24, range: 18-28)",
+    )
+    parser.add_argument(
+        "--hardware",
+        action="store_true",
+        help="Use hardware acceleration if available (default: False)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Don't actually transcode, just simulate (default: False)",
+    )
+    parser.add_argument(
+        "--manifest",
+        help="Use existing manifest file instead of scanning (default: generates new manifest)",
+    )
+    parser.add_argument(
+        "--min-free-space",
+        type=float,
+        default=10.0,
+        help="Minimum free space to maintain in GB (default: 10GB)",
+    )
+    parser.add_argument(
+        "--max-files",
+        type=int,
+        default=0,
+        help="Maximum number of files to process (0 = all, default: 0)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Show raw ffmpeg output instead of progress tracking",
+    )
+    parser.add_argument(
+        "--archive",
+        action="store_true",
+        help="Use higher compression settings for archival quality",
+    )
+    parser.add_argument(
+        "--skip-subtitles",
+        action="store_true",
+        help="Exclude subtitle streams from output",
+    )
+    parser.add_argument(
+        "--hw-preset",
+        type=str,
+        help="Hardware encoder preset (p1-p7 for NVENC, quality/balanced/speed for VideoToolbox)",
+    )
+    parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="Analyze media files and print recommendations without converting",
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose logging during analysis",
+    )
+    parser.add_argument(
+        "--benchmark",
+        metavar="FILE",
+        help="Run a quick hardware vs software benchmark on a single file",
+    )
+    parser.add_argument(
+        "--benchmark-duration",
+        type=float,
+        default=60,
+        help="Duration in seconds for benchmark test (default: 60)",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=["archive", "fast", "quality"],
+        help="Encoding profile: archive (default), fast, or quality",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip interactive profile prompt (uses archive profile)",
+    )
     args = parser.parse_args()
-    
-    # Validate input and output directories
+
+    if args.yes and args.profile is None:
+        args.profile = DEFAULT_PROFILE
+
     input_dir = Path(args.input_dir).resolve()
-    output_dir = Path(args.output_dir).resolve()
-    
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else None
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    manifest_path = args.manifest
+    if manifest_path is None and output_dir is not None:
+        manifest_path = str(output_dir / "conversion_manifest.json")
+    elif manifest_path is None:
+        manifest_path = "conversion_manifest.json"
+
+    if args.benchmark:
+        return run_benchmark(args.benchmark, args.benchmark_duration, script_dir)
+
     if not input_dir.exists() or not input_dir.is_dir():
         print(f"Error: Input directory not found: {input_dir}")
         return 1
-    
-    # Create output directory if it doesn't exist
+
+    if args.analyze:
+        return run_analyze(input_dir, output_dir, manifest_path, args.verbose)
+
+    if output_dir is None:
+        print("Error: output_dir is required for conversion")
+        return 1
+
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except PermissionError:
-        print(f"Error: Cannot create output directory (permission denied): {output_dir}")
+        print(
+            f"Error: Cannot create output directory (permission denied): {output_dir}",
+        )
         return 1
-    
-    # Check if output directory is writable
+
     if not os.access(output_dir, os.W_OK):
         print(f"Error: Output directory is not writable: {output_dir}")
         return 1
-    
-    # Get the absolute path to the script directory
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Handle manifest generation
-    manifest_path = args.manifest or "conversion_manifest.json"
-    
+
     if not args.manifest:
-        # Generate manifest by scanning
-        scan_cmd = [
-            "python3", os.path.join(script_dir, "scan_media.py"),
-            str(input_dir),
-            str(output_dir),
-            "--manifest", manifest_path
-        ]
-        
-        # Add permission checking when in dry-run mode
-        if args.dry_run:
-            scan_cmd.append("--check-permissions")
-        
-        if not run_command(scan_cmd, "Scanning media files"):
+        print("\n=== Scanning media files ===")
+        if (
+            scan_and_write_manifest(
+                input_dir,
+                output_dir,
+                manifest_path,
+                check_permissions=args.dry_run,
+            )
+            != 0
+        ):
             return 1
     elif not os.path.exists(manifest_path):
         print(f"Error: Specified manifest not found: {manifest_path}")
         return 1
-    
-    # Check disk space
-    space_cmd = [
-        "python3", os.path.join(script_dir, "analyze_space.py"),
-        manifest_path,
-        "--min-free", str(args.min_free_space)
-    ]
-    
-    if not run_command(space_cmd, "Checking disk space"):
+
+    with open(manifest_path) as f:
+        pending_manifest = json.load(f)
+    if pending_manifest.get("total_files", 0) == 0:
+        print("\nAll files already converted. Nothing to do.")
+        return 0
+
+    print("\n=== Choosing encoding profile ===", flush=True)
+    try:
+        options, profile = resolve_conversion_options(args, manifest_path, output_dir)
+    except SystemExit as exc:
+        return 0 if exc.code == 0 else int(exc.code or 1)
+
+    output_ratio = profile.output_size_ratio if profile else None
+    print("\n=== Checking disk space ===")
+    if not check_disk_space(manifest_path, args.min_free_space, output_ratio):
         return 1
-    
-    # Build conversion command
-    convert_cmd = [
-        "python3", os.path.join(script_dir, "convert_media.py"),
-        manifest_path,
-        "--crf", str(args.crf)
-    ]
-    
-    if args.hardware:
-        convert_cmd.append("--hardware")
-    
-    if args.dry_run:
-        convert_cmd.append("--dry-run")
-    
-    if args.max_files > 0:
-        convert_cmd.extend(["--max-files", str(args.max_files)])
-    
-    # Add new options
-    if args.debug:
-        convert_cmd.append("--debug")
-    
-    if args.archive:
-        convert_cmd.append("--archive")
-    
-    # Run conversion
-    if not run_command(convert_cmd, "Converting media files"):
+
+    print("\n=== Converting media files ===")
+    if run_conversion(manifest_path, options) != 0:
         return 1
-    
-    print("\n✅ Conversion workflow completed successfully!")
+
+    print("\nConversion workflow completed successfully!")
     return 0
+
 
 if __name__ == "__main__":
     exit(main())
