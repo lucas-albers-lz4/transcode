@@ -17,6 +17,7 @@ Batch convert your media files to H.265/HEVC format.
 - **Integrity Verification:** Validates output files to ensure successful conversion
 - **Permission Checking:** In dry-run mode, checks source file permissions before conversion
 - **Analysis Mode:** Report codec info, encode recommendations, and estimated savings without converting
+- **Interactive Encode Profiles:** Scan your library, compare Archive/Fast/Quality options with time and size estimates, then pick a profile
 
 ## Requirements
 
@@ -60,14 +61,36 @@ pip install -r requirements.txt
 
 ## Basic Usage
 
-The main entry point is `convert_to_h265.py`:
+The main entry point is `convert_to_h265.py`. By default it scans your library, shows three encoding profiles with estimated time and output size, and prompts you to choose:
 
 ```bash
-./convert_to_h265.py INPUT_DIR OUTPUT_DIR [options]
+./convert_to_h265.py INPUT_DIR OUTPUT_DIR
 ```
+
+Press **Enter** to accept **Archive** (recommended for media library prep), or type `1`, `2`, or `3`.
+
+| Profile | Best for | Typical settings |
+|---------|----------|------------------|
+| **Archive** (default) | Library storage; balanced quality and size | Auto HW/SW · x265 medium or NVENC p5 · CRF/CQ ~24 |
+| **Fast** | Bulk transcodes when speed matters | NVENC p3 · CQ 28 |
+| **Quality** | Best picture · CPU only · small batches | x265 slow · CRF 20 · no GPU |
+
+Non-interactive usage:
+
+```bash
+# Use Archive without prompting
+./convert_to_h265.py INPUT_DIR OUTPUT_DIR --profile archive
+
+# Same as Enter at the prompt
+./convert_to_h265.py INPUT_DIR OUTPUT_DIR -y
+```
+
+Legacy flags (`--hardware`, `--crf`, `--archive`, `--hw-preset`) skip the profile picker and use explicit settings.
 
 ## Command-Line Options
 
+- `--profile PROFILE`: Encoding profile — `archive`, `fast`, or `quality`
+- `-y`, `--yes`: Skip the interactive prompt (uses `archive` profile)
 - `--crf VALUE`: Set the CRF (quality) value (default: 24, range: 18-28, lower is better quality)
 - `--hardware`: Use hardware acceleration if available
 - `--dry-run`: Simulate conversion without actually transcoding
@@ -131,10 +154,11 @@ The default conversion workflow (orchestrated in-process by `convert_to_h265.py`
 
 1. Scan input directory for media files (`scan_media.py`)
 2. Generate conversion manifest
-3. Check available disk space (`analyze_space.py`)
-4. Convert files one by one (`convert_media.py`)
-5. Verify integrity of output files
-6. Run error analysis on failures (`analyze_errors.py`)
+3. Analyze files and choose an encoding profile (interactive or via `--profile`)
+4. Check available disk space using profile-aware size estimates (`analyze_space.py`)
+5. Convert files one by one (`convert_media.py`)
+6. Verify integrity of output files
+7. Run error analysis on failures (`analyze_errors.py`)
 
 Each step also remains runnable as a standalone script for debugging or partial reruns. Shared helpers live in `ffmpeg_utils.py`. Analysis reporting is in `media_analysis.py`.
 

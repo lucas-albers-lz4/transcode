@@ -10,13 +10,18 @@ from pathlib import Path
 import psutil
 
 
-def check_disk_space(manifest_path: str, min_free_gb: float = 1.0) -> bool:
+def check_disk_space(
+    manifest_path: str,
+    min_free_gb: float = 1.0,
+    output_ratio: float | None = None,
+) -> bool:
     """
     Check if there's enough disk space for the conversion.
 
     Args:
         manifest_path: Path to the conversion manifest
         min_free_gb: Minimum free space to maintain in GB
+        output_ratio: Estimated output size as fraction of input (default 0.7)
 
     Returns:
         bool: True if enough space, False otherwise
@@ -36,8 +41,8 @@ def check_disk_space(manifest_path: str, min_free_gb: float = 1.0) -> bool:
 
     output_dir = Path(manifest["output_dir"])
 
-    # Calculate estimated output size (assuming 70% of input size)
-    estimated_output_bytes = manifest["total_size_bytes"] * 0.7
+    ratio = 0.7 if output_ratio is None else output_ratio
+    estimated_output_bytes = manifest["total_size_bytes"] * ratio
 
     # Get free space on output drive
     free_space = psutil.disk_usage(output_dir).free

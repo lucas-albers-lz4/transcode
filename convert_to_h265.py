@@ -14,6 +14,19 @@ from pathlib import Path
 
 from analyze_space import check_disk_space
 from convert_media import ConversionOptions, run_conversion
+from encode_profiles import (
+    DEFAULT_PROFILE,
+    EncodeProfile,
+    get_profile,
+    has_legacy_encode_flags,
+    profile_to_options_kwargs,
+    prompt_encode_profile,
+)
+from media_analysis import (
+    analyses_from_manifest,
+    analyze_batch,
+    estimate_all_profiles,
+)
 from scan_media import scan_and_write_manifest
 
 
@@ -91,6 +104,63 @@ def run_benchmark(benchmark_file: str, duration: float, script_dir: str) -> int:
         str(duration),
     ]
     return subprocess.run(cmd).returncode
+
+
+def resolve_conversion_options(
+    args: argparse.Namespace,
+    manifest_path: str,
+    output_dir: Path,
+) -> tuple[ConversionOptions, EncodeProfile | None]:
+    """Build ConversionOptions from CLI args, profile, or interactive selection."""
+    if has_legacy_encode_flags(args):
+        return ConversionOptions(
+            crf=args.crf,
+            hardware=args.hardware,
+            dry_run=args.dry_run,
+            max_files=args.max_files,
+            debug=args.debug,
+            archive=args.archive,
+            hw_preset=args.hw_preset,
+            skip_subtitles=args.skip_subtitles,
+        ), None
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    if not manifest.get("files"):
+        print("\nAll files already converted. Nothing to do.")
+        raise SystemExit(0)
+
+    analyses = analyses_from_manifest(manifest)
+    if not analyses:
+        print("Error: No analyzable media files found.")
+        raise SystemExit(1)
+
+    estimates = estimate_all_profiles(analyses)
+    profile_name = args.profile
+    if profile_name is None:
+        input_gb = estimates[DEFAULT_PROFILE].input_gb
+        profile_name = prompt_encode_profile(
+            len(analyses),
+            input_gb,
+            estimates,
+        )
+
+    profile = get_profile(profile_name)
+    estimate = estimates[profile_name]
+    kwargs = profile_to_options_kwargs(profile_name)
+    options = ConversionOptions(
+        dry_run=args.dry_run,
+        max_files=args.max_files,
+        debug=args.debug,
+        skip_subtitles=args.skip_subtitles,
+        **kwargs,
+    )
+    print(
+        f"\nUsing profile: {profile.label} ({estimate.encoder_summary}, "
+        f"~{estimate.time_display}, ~{estimate.output_gb:.1f} GB output)",
+    )
+    return options, profile
 
 
 def main():
@@ -176,12 +246,30 @@ def main():
         default=60,
         help="Duration in seconds for benchmark test (default: 60)",
     )
+    parser.add_argument(
+        "--profile",
+        choices=["archive", "fast", "quality"],
+        help="Encoding profile: archive (default), fast, or quality",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip interactive profile prompt (uses archive profile)",
+    )
     args = parser.parse_args()
+
+    if args.yes and args.profile is None:
+        args.profile = DEFAULT_PROFILE
 
     input_dir = Path(args.input_dir).resolve()
     output_dir = Path(args.output_dir).resolve() if args.output_dir else None
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    manifest_path = args.manifest or "conversion_manifest.json"
+    manifest_path = args.manifest
+    if manifest_path is None and output_dir is not None:
+        manifest_path = str(output_dir / "conversion_manifest.json")
+    elif manifest_path is None:
+        manifest_path = "conversion_manifest.json"
 
     if args.benchmark:
         return run_benchmark(args.benchmark, args.benchmark_duration, script_dir)
@@ -225,21 +313,24 @@ def main():
         print(f"Error: Specified manifest not found: {manifest_path}")
         return 1
 
+    with open(manifest_path) as f:
+        pending_manifest = json.load(f)
+    if pending_manifest.get("total_files", 0) == 0:
+        print("\nAll files already converted. Nothing to do.")
+        return 0
+
+    print("\n=== Choosing encoding profile ===", flush=True)
+    try:
+        options, profile = resolve_conversion_options(args, manifest_path, output_dir)
+    except SystemExit as exc:
+        return 0 if exc.code == 0 else int(exc.code or 1)
+
+    output_ratio = profile.output_size_ratio if profile else None
     print("\n=== Checking disk space ===")
-    if not check_disk_space(manifest_path, args.min_free_space):
+    if not check_disk_space(manifest_path, args.min_free_space, output_ratio):
         return 1
 
     print("\n=== Converting media files ===")
-    options = ConversionOptions(
-        crf=args.crf,
-        hardware=args.hardware,
-        dry_run=args.dry_run,
-        max_files=args.max_files,
-        debug=args.debug,
-        archive=args.archive,
-        hw_preset=args.hw_preset,
-        skip_subtitles=args.skip_subtitles,
-    )
     if run_conversion(manifest_path, options) != 0:
         return 1
 

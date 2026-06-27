@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import platform
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -352,9 +353,19 @@ def total_input_size(analyses: dict[str, dict[str, Any]]) -> float:
     return sum(_file_size_bytes(a) for a in analyses.values()) / (1024 * 1024)
 
 
-def total_estimated_output_size(analyses: dict[str, dict[str, Any]]) -> float:
+def total_estimated_output_size(
+    analyses: dict[str, dict[str, Any]],
+    output_ratio: float | None = None,
+) -> float:
     """Estimate total output size in MB after conversion."""
-    return sum(_estimated_output_bytes(a) for a in analyses.values()) / (1024 * 1024)
+    ratio = OUTPUT_SIZE_RATIO if output_ratio is None else output_ratio
+    total = 0.0
+    for analysis in analyses.values():
+        if analysis["recommended"]["codec"] == "current":
+            total += _file_size_bytes(analysis)
+        else:
+            total += int(_file_size_bytes(analysis) * ratio)
+    return total / (1024 * 1024)
 
 
 def total_estimated_savings(analyses: dict[str, dict[str, Any]]) -> float:
@@ -369,17 +380,184 @@ def _format_size_mb(size_mb: float) -> str:
     return f"{rounded} MB"
 
 
-def format_space_summary(analyses: dict[str, dict[str, Any]]) -> str:
+def format_space_summary(
+    analyses: dict[str, dict[str, Any]],
+    output_ratio: float | None = None,
+) -> str:
     """Format source, output, and savings size estimates."""
     input_mb = total_input_size(analyses)
-    output_mb = total_estimated_output_size(analyses)
-    savings_mb = total_estimated_savings(analyses)
+    output_mb = total_estimated_output_size(analyses, output_ratio=output_ratio)
+    savings_mb = input_mb - output_mb
 
     return (
         f"\nTotal source size: {_format_size_mb(input_mb)}"
         f"\nTotal estimated output size: {_format_size_mb(output_mb)}"
         f"\nTotal estimated space savings: {_format_size_mb(savings_mb)}"
     )
+
+
+@dataclass
+class ProfileEstimate:
+    total_seconds: float
+    output_mb: float
+    input_mb: float
+    output_gb: float
+    input_gb: float
+    hw_file_count: int
+    sw_file_count: int
+    skip_file_count: int
+    encoder_summary: str
+    time_display: str
+
+
+def analysis_from_manifest_entry(file_info: dict[str, Any]) -> dict[str, Any]:
+    """Build a minimal analysis dict from a manifest file entry (no re-probe)."""
+    resolution = file_info.get("resolution", "1920x1080")
+    try:
+        height = int(resolution.split("x")[1])
+    except (IndexError, ValueError):
+        height = 1080
+
+    from ffmpeg_utils import is_h265_codec
+
+    video_codec = file_info.get("video_codec", "unknown")
+    is_hevc = is_h265_codec(video_codec)
+
+    return {
+        "current": {
+            "filesize": str(file_info.get("size", 0)),
+            "resolution": resolution,
+            "frame_rate": "24/1",
+            "duration": float(file_info.get("duration") or 0),
+        },
+        "recommended": {
+            "codec": "current" if is_hevc else "libx265",
+            "encode_method": determine_encode_method({"height": height, "tags": {}}),
+        },
+    }
+
+
+def analyses_from_manifest(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Build analysis results keyed by input path from a conversion manifest."""
+    analyses: dict[str, dict[str, Any]] = {}
+    for file_info in manifest.get("files", []):
+        input_path = file_info.get("input_path")
+        if input_path:
+            analyses[input_path] = analysis_from_manifest_entry(file_info)
+    return analyses
+
+
+def _file_encode_seconds(
+    filepath: str,
+    analysis: dict[str, Any],
+    profile: Any,
+    use_hardware: bool,
+) -> float:
+    cached_duration = analysis["current"].get("duration")
+    if cached_duration:
+        duration = float(cached_duration)
+    else:
+        duration = get_media_duration(filepath) or 0.0
+    width, height = analysis["current"]["resolution"].split("x")
+    pixels = int(width) * int(height)
+    base_pixels = 1280 * 720
+    resolution_factor = (pixels / base_pixels) ** 2
+    io_factor = 1.2
+    system_overhead = 1.3
+
+    hw_fps = 273.17 / (resolution_factor * io_factor * system_overhead)
+    sw_fps = 44.37 / (resolution_factor * io_factor * system_overhead)
+    hw_fps *= profile.hw_fps_factor
+    sw_fps *= profile.sw_fps_factor
+
+    fps = parse_frame_rate(analysis["current"].get("frame_rate", "24/1"))
+    total_frames = duration * fps
+    encode_fps = hw_fps if use_hardware else sw_fps
+    return total_frames / encode_fps if encode_fps else 0.0
+
+
+def _profile_use_hardware_for_file(profile: Any, analysis: dict[str, Any]) -> bool:
+    from encode_profiles import hardware_encoder_available
+
+    if analysis["recommended"]["codec"] == "current":
+        return False
+    if profile.use_hardware is False:
+        return False
+    if profile.use_hardware is True:
+        return hardware_encoder_available()
+    encode_info = analysis["recommended"].get("encode_method", {})
+    if encode_info.get("recommended") == "hardware":
+        return hardware_encoder_available()
+    return False
+
+
+def estimate_profile(
+    analyses: dict[str, dict[str, Any]],
+    profile_name: str,
+) -> ProfileEstimate:
+    """Estimate encode time and output size for a profile across all files."""
+    from encode_profiles import PROFILES
+
+    profile = PROFILES[profile_name]
+    total_seconds = 0.0
+    output_bytes = 0
+    input_bytes = 0
+    hw_count = 0
+    sw_count = 0
+    skip_count = 0
+
+    for filepath, analysis in analyses.items():
+        file_bytes = _file_size_bytes(analysis)
+        input_bytes += file_bytes
+        if analysis["recommended"]["codec"] == "current":
+            skip_count += 1
+            output_bytes += file_bytes
+            continue
+
+        use_hardware = _profile_use_hardware_for_file(profile, analysis)
+        if use_hardware:
+            hw_count += 1
+        else:
+            sw_count += 1
+        total_seconds += _file_encode_seconds(
+            filepath, analysis, profile, use_hardware,
+        )
+        output_bytes += int(file_bytes * profile.output_size_ratio)
+
+    hw_label = _hardware_encoder_label()
+    if skip_count and not (hw_count or sw_count):
+        encoder_summary = f"{skip_count} files already HEVC (skip)"
+    elif hw_count and sw_count:
+        encoder_summary = f"{hw_count} files {hw_label}, {sw_count} files x265"
+    elif hw_count:
+        encoder_summary = f"{hw_count} files {hw_label}"
+    elif sw_count:
+        encoder_summary = f"{sw_count} files x265"
+    else:
+        encoder_summary = "no files to convert"
+
+    input_mb = input_bytes / (1024 * 1024)
+    output_mb = output_bytes / (1024 * 1024)
+    return ProfileEstimate(
+        total_seconds=total_seconds,
+        output_mb=output_mb,
+        input_mb=input_mb,
+        output_gb=output_mb / 1024,
+        input_gb=input_mb / 1024,
+        hw_file_count=hw_count,
+        sw_file_count=sw_count,
+        skip_file_count=skip_count,
+        encoder_summary=encoder_summary,
+        time_display=_format_time(total_seconds),
+    )
+
+
+def estimate_all_profiles(
+    analyses: dict[str, dict[str, Any]],
+) -> dict[str, ProfileEstimate]:
+    from encode_profiles import PROFILE_NAMES
+
+    return {name: estimate_profile(analyses, name) for name in PROFILE_NAMES}
 
 
 def collect_files_for_analysis(

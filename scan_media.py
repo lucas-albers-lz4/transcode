@@ -14,7 +14,6 @@ from ffmpeg_utils import (
     get_media_duration,
     is_h265_encoded,
     is_media_file,
-    is_valid_hevc_file,
     path_within_root,
     probe_media,
 )
@@ -111,8 +110,8 @@ def find_media_files(
             continue
 
         if output_path.exists() and output_path.stat().st_size > 0:
-            if is_valid_hevc_file(output_path):
-                print(f"Skipping valid existing output: {rel_path}")
+            if is_h265_encoded(output_path):
+                print(f"Skipping existing HEVC output: {rel_path}")
                 continue
 
         temp_path = output_dir / f"{rel_path}.transcoding"

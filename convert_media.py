@@ -6,7 +6,6 @@ import argparse
 import json
 import logging
 import os
-import platform
 import select
 import shlex
 import signal
@@ -26,8 +25,14 @@ from ffmpeg_utils import (
     is_valid_hevc_file,
     parse_ffmpeg_progress_line,
     path_within_root,
+    probe_media,
     start_stderr_drain,
     verify_media_file,
+)
+from encode_profiles import (
+    build_video_encode_args,
+    resolve_use_hardware,
+    settings_from_options,
 )
 
 # Global for tracking current process
@@ -77,6 +82,17 @@ def log_conversion_failure(
     )
 
 
+def get_video_stream(filepath: str) -> dict | None:
+    """Return the primary video stream from a media file."""
+    data = probe_media(filepath)
+    if not data:
+        return None
+    for stream in data.get("streams", []):
+        if stream.get("codec_type") == "video":
+            return stream
+    return None
+
+
 def convert_file(
     input_path: str,
     output_path: str,
@@ -87,6 +103,11 @@ def convert_file(
     archive: bool = False,
     hw_preset: str | None = None,
     skip_subtitles: bool = False,
+    auto_hardware: bool = False,
+    software_preset: str = "medium",
+    nvenc_cq: int | None = None,
+    vt_preset: str = "balanced",
+    encode_profile: str | None = None,
 ) -> bool:
     """Convert a single file to h265 with proper audio handling"""
     global current_process
@@ -163,174 +184,39 @@ def convert_file(
         cmd.extend(["-progress", "pipe:1", "-nostdin", "-stats"])
 
     # Video encoding settings
-    if use_hardware:
-        # Different hardware encoders based on platform
+    encode_options = ConversionOptions(
+        crf=crf,
+        hardware=use_hardware,
+        auto_hardware=auto_hardware,
+        dry_run=dry_run,
+        debug=debug,
+        archive=archive,
+        hw_preset=hw_preset,
+        skip_subtitles=skip_subtitles,
+        software_preset=software_preset,
+        nvenc_cq=nvenc_cq,
+        vt_preset=vt_preset,
+        encode_profile=encode_profile,
+    )
+    settings = settings_from_options(encode_options)
+    video_stream = get_video_stream(input_path)
+    use_hw = resolve_use_hardware(settings, video_stream)
+    if settings.use_hardware and not use_hw and not settings.auto_hardware:
+        import platform
+
         system = platform.system()
-
-        if system == "Darwin":  # macOS
-            # VideoToolbox doesn't have traditional presets, but we can adjust quality
-            # based on a preset name if we want to simulate different presets
-            vt_quality = "60"  # Default quality
-
-            if hw_preset == "quality":
-                vt_quality = "80"  # Higher quality
-            elif hw_preset == "balanced":
-                vt_quality = "60"  # Default quality
-            elif hw_preset == "speed":
-                vt_quality = "40"  # Lower quality, faster
-
-            cmd.extend(
-                [
-                    "-c:v",
-                    "hevc_videotoolbox",
-                    "-q:v",
-                    vt_quality,
-                    "-tag:v",
-                    "hvc1",
-                    "-allow_sw",
-                    "1",
-                ],
-            )
+        if system == "Linux":
             print(
-                f"Using Apple VideoToolbox hardware acceleration with quality {vt_quality}",
+                "Hardware acceleration unavailable. Falling back to software encoding.",
             )
-        elif system == "Linux":
-            # Check for NVIDIA GPU and NVENC support
-            has_nvidia = False
-            has_nvenc = False
-
-            try:
-                # Check if nvidia-smi command exists and returns successfully
-                nvidia_check = subprocess.run(
-                    ["nvidia-smi"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-                has_nvidia = nvidia_check.returncode == 0
-
-                # Check if ffmpeg has nvenc support
-                if has_nvidia:
-                    nvenc_check = subprocess.run(
-                        ["ffmpeg", "-encoders"], capture_output=True, text=True,
-                    )
-                    has_nvenc = "hevc_nvenc" in nvenc_check.stdout
-            except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-                has_nvidia = False
-                has_nvenc = False
-
-            if has_nvidia and has_nvenc:
-                # Set NVENC preset (p1-p7, default to p4 if not specified)
-                nvenc_preset = (
-                    hw_preset
-                    if hw_preset in ["p1", "p2", "p3", "p4", "p5", "p6", "p7"]
-                    else "p4"
-                )
-
-                # For archive mode, use higher quality settings
-                if archive:
-                    # These values will be determined by your benchmark results
-                    nvenc_preset = "p5"  # Adjust based on benchmark results
-                    nvenc_cq = 27  # Adjust based on benchmark results
-                    cmd.extend(
-                        [
-                            "-c:v",
-                            "hevc_nvenc",
-                            "-preset",
-                            nvenc_preset,
-                            "-cq",
-                            str(nvenc_cq),
-                            "-tag:v",
-                            "hvc1",
-                        ],
-                    )
-                    print(
-                        f"Using NVIDIA hardware acceleration (NVENC) on Linux with archive settings: preset {nvenc_preset}, CQ {nvenc_cq}",
-                    )
-                else:
-                    # Regular (non-archive) encoding
-                    cmd.extend(
-                        [
-                            "-c:v",
-                            "hevc_nvenc",
-                            "-preset",
-                            nvenc_preset,
-                            "-cq",
-                            "28",  # Default quality, use CQ instead of QP
-                            "-tag:v",
-                            "hvc1",
-                        ],
-                    )
-                    print(
-                        f"Using NVIDIA hardware acceleration (NVENC) on Linux with preset {nvenc_preset}",
-                    )
-            else:
-                # Fall back to software encoding
-                if has_nvidia and not has_nvenc:
-                    print(
-                        "NVIDIA GPU detected but FFmpeg lacks NVENC support. Using software encoding.",
-                    )
-                    print(
-                        "Install FFmpeg with NVENC support for hardware acceleration.",
-                    )
-                    print(
-                        "You may need to compile FFmpeg with --enable-cuda-llvm or --enable-ffnvcodec.",
-                    )
-                elif not has_nvidia:
-                    print("NVIDIA GPU not detected. Using software encoding.")
-
-                cmd.extend(
-                    [
-                        "-c:v",
-                        "libx265",
-                        "-preset",
-                        "medium",
-                        "-crf",
-                        str(crf),
-                    ],
-                )
-        else:
-            # Fallback to software encoding for other platforms
+        elif system not in ("Darwin", "Linux"):
             print(
-                "Hardware acceleration not supported on this platform. Using software encoding.",
+                "Hardware acceleration not supported on this platform. "
+                "Using software encoding.",
             )
-            cmd.extend(
-                [
-                    "-c:v",
-                    "libx265",
-                    "-preset",
-                    "medium",
-                    "-crf",
-                    str(crf),
-                ],
-            )
-    else:
-        # Determine preset and CRF based on archive mode
-        if archive:
-            preset = "slower"
-            archive_crf = crf + 4  # Higher CRF for better compression
-            cmd.extend(
-                [
-                    "-c:v",
-                    "libx265",
-                    "-preset",
-                    preset,
-                    "-crf",
-                    str(archive_crf),
-                ],
-            )
-            print(f"Using archive mode: preset={preset}, crf={archive_crf}")
-        else:
-            cmd.extend(
-                [
-                    "-c:v",
-                    "libx265",
-                    "-preset",
-                    "medium",
-                    "-crf",
-                    str(crf),
-                ],
-            )
+    video_args, encode_message = build_video_encode_args(settings, use_hw)
+    cmd.extend(video_args)
+    print(encode_message)
 
     # Process each audio stream
     if audio_streams:
@@ -755,12 +641,17 @@ def validate_manifest_paths(manifest):
 class ConversionOptions:
     crf: int = 24
     hardware: bool = False
+    auto_hardware: bool = False
     dry_run: bool = False
     max_files: int = 0
     debug: bool = False
     archive: bool = False
     hw_preset: str | None = None
+    software_preset: str = "medium"
+    nvenc_cq: int | None = None
+    vt_preset: str = "balanced"
     skip_subtitles: bool = False
+    encode_profile: str | None = None
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> "ConversionOptions":
@@ -809,10 +700,12 @@ def run_conversion(manifest_path: str | Path, options: ConversionOptions) -> int
     success_count = 0
     fail_count = 0
 
+    profile_label = options.encode_profile or "legacy"
     print(
-        f"CRF: {options.crf}, Hardware: {options.hardware}, Dry Run: {options.dry_run}, "
-        f"Debug: {options.debug}, Archive: {options.archive}, HW Preset: {options.hw_preset}, "
-        f"Skip Subtitles: {options.skip_subtitles}",
+        f"Profile: {profile_label}, CRF: {options.crf}, Hardware: {options.hardware}, "
+        f"Auto Hardware: {options.auto_hardware}, Dry Run: {options.dry_run}, "
+        f"Debug: {options.debug}, Archive: {options.archive}, "
+        f"HW Preset: {options.hw_preset}, Skip Subtitles: {options.skip_subtitles}",
     )
 
     print(f"Starting conversion of {len(files)} files")
@@ -835,6 +728,11 @@ def run_conversion(manifest_path: str | Path, options: ConversionOptions) -> int
             archive=options.archive,
             hw_preset=options.hw_preset,
             skip_subtitles=options.skip_subtitles,
+            auto_hardware=options.auto_hardware,
+            software_preset=options.software_preset,
+            nvenc_cq=options.nvenc_cq,
+            vt_preset=options.vt_preset,
+            encode_profile=options.encode_profile,
         )
 
         if success:
