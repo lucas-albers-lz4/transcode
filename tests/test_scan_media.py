@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from scan_media import count_job_progress, scan_and_write_manifest
+from scan_media import scan_and_write_manifest
 
 
 def test_scan_and_write_manifest(tmp_path, monkeypatch):
