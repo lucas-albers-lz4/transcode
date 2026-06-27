@@ -102,6 +102,12 @@ The main entry point is `convert_to_h265.py`:
 Scan and print encode recommendations without transcoding:
 
 ```bash
+./convert_to_h265.py /path/to/source --analyze
+```
+
+You can optionally pass an output directory to exclude files that are already converted there:
+
+```bash
 ./convert_to_h265.py /path/to/source /path/to/destination --analyze
 ```
 

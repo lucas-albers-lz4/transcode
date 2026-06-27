@@ -26,7 +26,10 @@ def run_command(cmd, description):
 
 
 def run_analyze(
-    input_dir: Path, output_dir: Path, manifest_path: str, verbose: bool,
+    input_dir: Path,
+    output_dir: Path | None,
+    manifest_path: str,
+    verbose: bool,
 ) -> int:
     """Run analysis-only mode: scan, analyze, print report."""
     from media_analysis import (
@@ -42,12 +45,13 @@ def run_analyze(
     )
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    filepaths: list[str] = []
 
     if os.path.exists(manifest_path):
         with open(manifest_path) as f:
             manifest = json.load(f)
         filepaths = [entry["input_path"] for entry in manifest.get("files", [])]
-    else:
+    elif output_dir is not None:
         scan_cmd = [
             sys.executable,
             os.path.join(script_dir, "scan_media.py"),
@@ -61,15 +65,21 @@ def run_analyze(
         with open(manifest_path) as f:
             manifest = json.load(f)
         filepaths = [entry["input_path"] for entry in manifest.get("files", [])]
+    else:
+        filepaths = [str(p) for p in collect_files_for_analysis(input_dir)]
 
     if not filepaths:
-        filepaths = [str(p) for p in collect_files_for_analysis(input_dir, output_dir)]
+        filepaths = [str(p) for p in collect_files_for_analysis(input_dir)]
 
     if not filepaths:
         print("No files to analyze.")
         return 0
 
-    cache_file = output_dir / "media_analysis.json"
+    cache_file = (
+        output_dir / "media_analysis.json"
+        if output_dir
+        else Path.cwd() / "media_analysis.json"
+    )
     analyses = analyze_batch(filepaths, cache_file=cache_file)
 
     if not analyses:
@@ -104,7 +114,12 @@ def run_benchmark(benchmark_file: str, duration: float, script_dir: str) -> int:
 def main():
     parser = argparse.ArgumentParser(description="Convert media files to h265")
     parser.add_argument("input_dir", help="Input directory containing media files")
-    parser.add_argument("output_dir", help="Output directory for converted files")
+    parser.add_argument(
+        "output_dir",
+        nargs="?",
+        default=None,
+        help="Output directory for converted files (optional with --analyze)",
+    )
     parser.add_argument(
         "--crf",
         type=int,
@@ -182,7 +197,7 @@ def main():
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir).resolve()
-    output_dir = Path(args.output_dir).resolve()
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else None
     script_dir = os.path.dirname(os.path.abspath(__file__))
     manifest_path = args.manifest or "conversion_manifest.json"
 
@@ -191,6 +206,13 @@ def main():
 
     if not input_dir.exists() or not input_dir.is_dir():
         print(f"Error: Input directory not found: {input_dir}")
+        return 1
+
+    if args.analyze:
+        return run_analyze(input_dir, output_dir, manifest_path, args.verbose)
+
+    if output_dir is None:
+        print("Error: output_dir is required for conversion")
         return 1
 
     try:
@@ -204,9 +226,6 @@ def main():
     if not os.access(output_dir, os.W_OK):
         print(f"Error: Output directory is not writable: {output_dir}")
         return 1
-
-    if args.analyze:
-        return run_analyze(input_dir, output_dir, manifest_path, args.verbose)
 
     if not args.manifest:
         scan_cmd = [

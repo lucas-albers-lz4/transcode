@@ -343,7 +343,6 @@ def total_estimated_savings(analyses: dict[str, dict[str, Any]]) -> float:
 
 def collect_files_for_analysis(
     input_dir: Path,
-    output_dir: Path,
 ) -> list[Path]:
     """Collect non-HEVC media files under input_dir for analysis."""
     from ffmpeg_utils import is_media_file, path_within_root
