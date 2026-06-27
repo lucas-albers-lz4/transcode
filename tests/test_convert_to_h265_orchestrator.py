@@ -13,8 +13,9 @@ def test_conversion_calls_library_functions(tmp_path, monkeypatch):
 
     calls = {"scan": False, "space": False, "convert": False}
 
-    def fake_scan(input_dir, output_dir, manifest_path, **kwargs):
+    def fake_scan_library(input_dir, output_dir, check_permissions=False):
         calls["scan"] = True
+        manifest_path = output_dir / "conversion_manifest.json"
         manifest = {
             "input_dir": str(input_dir),
             "output_dir": str(output_dir),
@@ -33,9 +34,9 @@ def test_conversion_calls_library_functions(tmp_path, monkeypatch):
         }
         with open(manifest_path, "w") as f:
             json.dump(manifest, f)
-        return 0
+        return 1, manifest_path
 
-    def fake_space(manifest_path, min_free_gb, output_ratio=None):
+    def fake_space(manifest_path, profile, min_free_gb):
         calls["space"] = True
         return True
 
@@ -46,9 +47,13 @@ def test_conversion_calls_library_functions(tmp_path, monkeypatch):
     def fail_subprocess(*args, **kwargs):
         raise AssertionError("subprocess.run should not be called for conversion pipeline")
 
-    monkeypatch.setattr(convert_to_h265, "scan_and_write_manifest", fake_scan)
-    monkeypatch.setattr(convert_to_h265, "check_disk_space", fake_space)
-    monkeypatch.setattr(convert_to_h265, "run_conversion", fake_convert)
+    monkeypatch.setattr(convert_to_h265, "scan_library", fake_scan_library)
+    monkeypatch.setattr(convert_to_h265, "check_space_cli", fake_space)
+    monkeypatch.setattr(convert_to_h265, "run_convert", fake_convert)
+    monkeypatch.setattr(
+        "encode_profiles.hardware_encoder_available",
+        lambda: False,
+    )
     monkeypatch.setattr(convert_to_h265.subprocess, "run", fail_subprocess)
     monkeypatch.setattr(
         sys,
@@ -58,7 +63,8 @@ def test_conversion_calls_library_functions(tmp_path, monkeypatch):
             str(input_dir),
             str(output_dir),
             "--dry-run",
-            "--hardware",
+            "--profile",
+            "archive",
         ],
     )
 

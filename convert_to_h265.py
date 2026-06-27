@@ -12,22 +12,22 @@ import subprocess
 import sys
 from pathlib import Path
 
-from analyze_space import check_disk_space
-from convert_media import ConversionOptions, run_conversion
+from convert_media import ConversionOptions
 from encode_profiles import (
     DEFAULT_PROFILE,
     EncodeProfile,
     get_profile,
     has_legacy_encode_flags,
-    profile_to_options_kwargs,
     prompt_encode_profile,
 )
-from media_analysis import (
-    analyses_from_manifest,
-    analyze_batch,
-    estimate_all_profiles,
+from media_analysis import analyses_from_manifest, estimate_all_profiles
+from workflow import (
+    check_space_cli,
+    conversion_options_for_profile,
+    manifest_path_for,
+    run_convert,
+    scan_library,
 )
-from scan_media import scan_and_write_manifest
 
 
 def run_analyze(
@@ -43,6 +43,7 @@ def run_analyze(
         format_analysis_table,
         format_space_summary,
     )
+    from scan_media import scan_and_write_manifest
 
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.WARNING,
@@ -109,7 +110,6 @@ def run_benchmark(benchmark_file: str, duration: float, script_dir: str) -> int:
 def resolve_conversion_options(
     args: argparse.Namespace,
     manifest_path: str,
-    output_dir: Path,
 ) -> tuple[ConversionOptions, EncodeProfile | None]:
     """Build ConversionOptions from CLI args, profile, or interactive selection."""
     if has_legacy_encode_flags(args):
@@ -148,13 +148,12 @@ def resolve_conversion_options(
 
     profile = get_profile(profile_name)
     estimate = estimates[profile_name]
-    kwargs = profile_to_options_kwargs(profile_name)
-    options = ConversionOptions(
+    options = conversion_options_for_profile(
+        profile_name,
         dry_run=args.dry_run,
         max_files=args.max_files,
         debug=args.debug,
         skip_subtitles=args.skip_subtitles,
-        **kwargs,
     )
     print(
         f"\nUsing profile: {profile.label} ({estimate.encoder_summary}, "
@@ -267,7 +266,7 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     manifest_path = args.manifest
     if manifest_path is None and output_dir is not None:
-        manifest_path = str(output_dir / "conversion_manifest.json")
+        manifest_path = str(manifest_path_for(output_dir))
     elif manifest_path is None:
         manifest_path = "conversion_manifest.json"
 
@@ -299,39 +298,40 @@ def main():
 
     if not args.manifest:
         print("\n=== Scanning media files ===")
-        if (
-            scan_and_write_manifest(
+        try:
+            file_count, manifest = scan_library(
                 input_dir,
                 output_dir,
-                manifest_path,
                 check_permissions=args.dry_run,
             )
-            != 0
-        ):
+        except RuntimeError:
             return 1
+        if file_count == 0:
+            print("\nAll files already converted. Nothing to do.")
+            return 0
+        manifest_path = str(manifest)
     elif not os.path.exists(manifest_path):
         print(f"Error: Specified manifest not found: {manifest_path}")
         return 1
-
-    with open(manifest_path) as f:
-        pending_manifest = json.load(f)
-    if pending_manifest.get("total_files", 0) == 0:
-        print("\nAll files already converted. Nothing to do.")
-        return 0
+    else:
+        with open(manifest_path) as f:
+            pending_manifest = json.load(f)
+        if pending_manifest.get("total_files", 0) == 0:
+            print("\nAll files already converted. Nothing to do.")
+            return 0
 
     print("\n=== Choosing encoding profile ===", flush=True)
     try:
-        options, profile = resolve_conversion_options(args, manifest_path, output_dir)
+        options, profile = resolve_conversion_options(args, manifest_path)
     except SystemExit as exc:
         return 0 if exc.code == 0 else int(exc.code or 1)
 
-    output_ratio = profile.output_size_ratio if profile else None
     print("\n=== Checking disk space ===")
-    if not check_disk_space(manifest_path, args.min_free_space, output_ratio):
+    if not check_space_cli(manifest_path, profile, args.min_free_space):
         return 1
 
     print("\n=== Converting media files ===")
-    if run_conversion(manifest_path, options) != 0:
+    if run_convert(manifest_path, options) != 0:
         return 1
 
     print("\nConversion workflow completed successfully!")

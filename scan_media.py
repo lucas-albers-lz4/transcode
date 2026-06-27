@@ -6,6 +6,7 @@ Outputs a JSON manifest of files to be processed.
 import argparse
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,7 @@ def find_media_files(
     input_dir: Path,
     output_dir: Path,
     check_permissions: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Find all media files recursively that need conversion.
@@ -88,8 +90,12 @@ def find_media_files(
     unreadable_files = []
 
     input_dir = input_dir.resolve()
+    checked = 0
 
     for filepath in input_dir.rglob("*"):
+        checked += 1
+        if on_progress and checked % 100 == 0:
+            on_progress(checked, len(to_convert))
         if not filepath.is_file() or not is_media_file(filepath):
             continue
 
@@ -142,6 +148,9 @@ def find_media_files(
         )
         to_convert.append(file_info)
 
+    if on_progress:
+        on_progress(checked, len(to_convert))
+
     if unreadable_files and check_permissions:
         print(f"\nWarning: Found {len(unreadable_files)} unreadable files:")
         for file in unreadable_files:
@@ -184,6 +193,7 @@ def scan_and_write_manifest(
     manifest_path: str | Path,
     *,
     check_permissions: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> int:
     """Scan input_dir, write manifest JSON. Returns 0 on success, 1 on failure."""
     if not check_ffmpeg_dependencies():
@@ -199,7 +209,12 @@ def scan_and_write_manifest(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Scanning directory: {input_dir}")
-    files = find_media_files(input_dir, output_dir, check_permissions)
+    files = find_media_files(
+        input_dir,
+        output_dir,
+        check_permissions,
+        on_progress=on_progress,
+    )
 
     total_size_bytes = sum(f["size"] for f in files)
     total_size_gb = total_size_bytes / (1024**3)

@@ -30,7 +30,7 @@ def test_scan_and_write_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr("scan_media.check_ffmpeg_dependencies", lambda: True)
     monkeypatch.setattr(
         "scan_media.find_media_files",
-        lambda i, o, check_permissions=False: fake_files,
+        lambda i, o, check_permissions=False, on_progress=None: fake_files,
     )
 
     assert scan_and_write_manifest(input_dir, output_dir, manifest_path) == 0
