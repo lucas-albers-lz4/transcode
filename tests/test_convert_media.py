@@ -125,3 +125,22 @@ def test_run_conversion_success(tmp_path, monkeypatch):
     )
 
     assert run_conversion(manifest_path, ConversionOptions(dry_run=True)) == 0
+
+
+def test_setup_signal_handlers_skips_in_worker_thread():
+    import threading
+
+    from convert_media import setup_signal_handlers
+
+    errors: list[Exception] = []
+
+    def run() -> None:
+        try:
+            setup_signal_handlers()
+        except ValueError as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join()
+    assert errors == []

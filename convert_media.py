@@ -11,6 +11,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,6 +19,11 @@ from pathlib import Path
 
 import psutil
 
+from encode_profiles import (
+    build_video_encode_args,
+    resolve_use_hardware,
+    settings_from_options,
+)
 from ffmpeg_utils import (
     MEDIA_EXTENSIONS,
     check_ffmpeg_dependencies,
@@ -28,11 +34,6 @@ from ffmpeg_utils import (
     probe_media,
     start_stderr_drain,
     verify_media_file,
-)
-from encode_profiles import (
-    build_video_encode_args,
-    resolve_use_hardware,
-    settings_from_options,
 )
 
 # Global for tracking current process
@@ -54,7 +55,9 @@ def signal_handler(signum, frame):
 
 
 def setup_signal_handlers():
-    """Set up signal handlers for graceful termination"""
+    """Set up signal handlers for graceful termination."""
+    if threading.current_thread() is not threading.main_thread():
+        return
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
