@@ -6,6 +6,7 @@ Outputs a JSON manifest of files to be processed.
 import argparse
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from ffmpeg_utils import (
     get_media_duration,
     is_h265_encoded,
     is_media_file,
+    is_valid_hevc_file,
     path_within_root,
     probe_media,
 )
@@ -80,6 +82,7 @@ def find_media_files(
     input_dir: Path,
     output_dir: Path,
     check_permissions: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Find all media files recursively that need conversion.
@@ -88,8 +91,12 @@ def find_media_files(
     unreadable_files = []
 
     input_dir = input_dir.resolve()
+    checked = 0
 
     for filepath in input_dir.rglob("*"):
+        checked += 1
+        if on_progress and checked % 100 == 0:
+            on_progress(checked, len(to_convert))
         if not filepath.is_file() or not is_media_file(filepath):
             continue
 
@@ -142,6 +149,9 @@ def find_media_files(
         )
         to_convert.append(file_info)
 
+    if on_progress:
+        on_progress(checked, len(to_convert))
+
     if unreadable_files and check_permissions:
         print(f"\nWarning: Found {len(unreadable_files)} unreadable files:")
         for file in unreadable_files:
@@ -149,6 +159,38 @@ def find_media_files(
         print("\nYou may need to fix permissions before proceeding.")
 
     return to_convert
+
+
+def count_job_progress(input_dir: Path, output_dir: Path) -> tuple[int, int]:
+    """
+    Count completed and total files for a conversion job.
+
+    Total is derived from source media that still needs conversion.
+    Completed counts destination outputs that are valid HEVC files.
+    """
+    total = 0
+    completed = 0
+    input_dir = input_dir.resolve()
+    output_dir = output_dir.resolve()
+
+    for filepath in input_dir.rglob("*"):
+        if not filepath.is_file() or not is_media_file(filepath):
+            continue
+        if not path_within_root(filepath, input_dir):
+            continue
+        if is_h265_encoded(filepath):
+            continue
+
+        total += 1
+        output_path = output_dir / filepath.relative_to(input_dir)
+        if (
+            output_path.exists()
+            and output_path.stat().st_size > 0
+            and is_valid_hevc_file(output_path)
+        ):
+            completed += 1
+
+    return completed, total
 
 
 def check_hw_encoders():
@@ -184,6 +226,7 @@ def scan_and_write_manifest(
     manifest_path: str | Path,
     *,
     check_permissions: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> int:
     """Scan input_dir, write manifest JSON. Returns 0 on success, 1 on failure."""
     if not check_ffmpeg_dependencies():
@@ -199,7 +242,12 @@ def scan_and_write_manifest(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Scanning directory: {input_dir}")
-    files = find_media_files(input_dir, output_dir, check_permissions)
+    files = find_media_files(
+        input_dir,
+        output_dir,
+        check_permissions,
+        on_progress=on_progress,
+    )
 
     total_size_bytes = sum(f["size"] for f in files)
     total_size_gb = total_size_bytes / (1024**3)

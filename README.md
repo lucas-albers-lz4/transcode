@@ -59,9 +59,48 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Basic Usage
+For the graphical wizard, also install GUI dependencies:
 
-The main entry point is `convert_to_h265.py`. By default it scans your library, shows three encoding profiles with estimated time and output size, and prompts you to choose:
+```bash
+pip install -r requirements-gui.txt
+```
+
+On Linux you may need the Tk system package: `sudo apt install python3-tk`
+
+## Graphical wizard (recommended for most users)
+
+Launch the two-step wizard:
+
+```bash
+python transcode_gui.py
+```
+
+Or use a launcher script:
+
+- **Windows:** `scripts\run_gui.bat`
+- **macOS:** double-click `scripts/run_gui.command` (or run in Terminal)
+- **Linux:** `./scripts/run_gui.sh`
+
+### Wizard flow
+
+1. **Step 1 — Folders:** Choose source folder and destination folder, then click **Next** (scan runs automatically).
+2. **Step 2 — Quality:** Pick **Archive**, **Fast**, or **Quality**, then **Start conversion**.
+
+The app checks that FFmpeg is installed on startup. FFmpeg is **not** bundled — install it separately (see Installation above).
+
+### Building a standalone app (optional)
+
+Requires `pip install -r requirements-gui.txt` (includes PyInstaller):
+
+```bash
+pyinstaller packaging/transcode_gui.spec
+```
+
+The built app is under `dist/transcode_gui/`. Users still need FFmpeg on their PATH.
+
+## Command-line usage (advanced)
+
+The CLI entry point is `convert_to_h265.py`. By default it scans your library, shows three encoding profiles with estimated time and output size, and prompts you to choose:
 
 ```bash
 ./convert_to_h265.py INPUT_DIR OUTPUT_DIR
