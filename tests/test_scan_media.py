@@ -1,8 +1,9 @@
 """Tests for scan_media manifest generation."""
 
 import json
+from pathlib import Path
 
-from scan_media import scan_and_write_manifest
+from scan_media import count_job_progress, scan_and_write_manifest
 
 
 def test_scan_and_write_manifest(tmp_path, monkeypatch):
@@ -54,3 +55,28 @@ def test_scan_and_write_manifest_missing_input(tmp_path, monkeypatch):
         )
         == 1
     )
+
+
+def test_count_job_progress(tmp_path, monkeypatch):
+    from scan_media import count_job_progress
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    for name in ("a.mp4", "b.mp4", "c.mp4"):
+        (input_dir / name).write_bytes(b"data")
+    (output_dir / "a.mp4").write_bytes(b"done")
+    (output_dir / "b.mp4").write_bytes(b"done")
+
+    monkeypatch.setattr("scan_media.is_h265_encoded", lambda _path: False)
+
+    def fake_valid(path):
+        return Path(path).name in {"a.mp4", "b.mp4"}
+
+    monkeypatch.setattr("scan_media.is_valid_hevc_file", fake_valid)
+
+    completed, total = count_job_progress(input_dir, output_dir)
+    assert total == 3
+    assert completed == 2

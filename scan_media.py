@@ -15,6 +15,7 @@ from ffmpeg_utils import (
     get_media_duration,
     is_h265_encoded,
     is_media_file,
+    is_valid_hevc_file,
     path_within_root,
     probe_media,
 )
@@ -158,6 +159,38 @@ def find_media_files(
         print("\nYou may need to fix permissions before proceeding.")
 
     return to_convert
+
+
+def count_job_progress(input_dir: Path, output_dir: Path) -> tuple[int, int]:
+    """
+    Count completed and total files for a conversion job.
+
+    Total is derived from source media that still needs conversion.
+    Completed counts destination outputs that are valid HEVC files.
+    """
+    total = 0
+    completed = 0
+    input_dir = input_dir.resolve()
+    output_dir = output_dir.resolve()
+
+    for filepath in input_dir.rglob("*"):
+        if not filepath.is_file() or not is_media_file(filepath):
+            continue
+        if not path_within_root(filepath, input_dir):
+            continue
+        if is_h265_encoded(filepath):
+            continue
+
+        total += 1
+        output_path = output_dir / filepath.relative_to(input_dir)
+        if (
+            output_path.exists()
+            and output_path.stat().st_size > 0
+            and is_valid_hevc_file(output_path)
+        ):
+            completed += 1
+
+    return completed, total
 
 
 def check_hw_encoders():

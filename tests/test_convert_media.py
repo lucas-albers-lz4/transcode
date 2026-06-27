@@ -222,6 +222,13 @@ def test_run_conversion_progress_callback(tmp_path, monkeypatch):
     monkeypatch.setattr("convert_media.setup_signal_handlers", lambda: None)
     monkeypatch.setattr("convert_media.convert_file", lambda *args, **kwargs: True)
 
+    progress_counts = iter([(2, 40), (3, 40)])
+
+    def fake_count_job_progress(input_dir, output_dir):
+        return next(progress_counts)
+
+    monkeypatch.setattr("convert_media.count_job_progress", fake_count_job_progress)
+
     updates: list[tuple[int, int, bool]] = []
 
     def on_progress(completed: int, total: int, converting: bool) -> None:
@@ -232,4 +239,4 @@ def test_run_conversion_progress_callback(tmp_path, monkeypatch):
         ConversionOptions(dry_run=True),
         on_progress=on_progress,
     ) == 0
-    assert updates == [(0, 1, True), (0, 1, True), (1, 1, False)]
+    assert updates == [(2, 40, True), (2, 40, True), (3, 40, False)]

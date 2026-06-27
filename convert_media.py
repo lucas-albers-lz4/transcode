@@ -36,6 +36,7 @@ from ffmpeg_utils import (
     start_stderr_drain,
     verify_media_file,
 )
+from scan_media import count_job_progress
 
 # Global for tracking current process
 current_process = None
@@ -724,6 +725,9 @@ def run_conversion(
 
     log_file = setup_logging(manifest["output_dir"])
 
+    input_dir = Path(manifest["input_dir"])
+    output_dir = Path(manifest["output_dir"])
+
     files = manifest["files"]
     files = [
         file
@@ -748,15 +752,16 @@ def run_conversion(
     )
 
     print(f"Starting conversion of {len(files)} files")
-    total_files = len(files)
+    completed_count, job_total = count_job_progress(input_dir, output_dir)
 
     if on_progress:
-        on_progress(0, total_files, True)
+        on_progress(completed_count, job_total, True)
 
     for i, file_info in enumerate(files):
         if cancel_requested:
+            completed_count, job_total = count_job_progress(input_dir, output_dir)
             print(
-                f"\nConversion cancelled. {success_count} file(s) completed; "
+                f"\nConversion cancelled. {completed_count} of {job_total} file(s) completed; "
                 "re-run to continue.",
             )
             return CONVERSION_CANCELLED
@@ -769,7 +774,7 @@ def run_conversion(
             continue
 
         if on_progress:
-            on_progress(success_count + fail_count, total_files, True)
+            on_progress(completed_count, job_total, True)
 
         success = convert_file(
             file_info["input_path"],
@@ -789,8 +794,9 @@ def run_conversion(
         )
 
         if cancel_requested:
+            completed_count, job_total = count_job_progress(input_dir, output_dir)
             print(
-                f"\nConversion cancelled. {success_count} file(s) completed; "
+                f"\nConversion cancelled. {completed_count} of {job_total} file(s) completed; "
                 "re-run to continue.",
             )
             return CONVERSION_CANCELLED
@@ -800,8 +806,9 @@ def run_conversion(
         else:
             fail_count += 1
 
+        completed_count, job_total = count_job_progress(input_dir, output_dir)
         if on_progress:
-            on_progress(success_count + fail_count, total_files, False)
+            on_progress(completed_count, job_total, False)
 
     print(f"\nConversion complete: {success_count} succeeded, {fail_count} failed")
     if fail_count > 0:
