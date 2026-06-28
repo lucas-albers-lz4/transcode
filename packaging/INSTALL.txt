@@ -1,0 +1,48 @@
+HEVC Video Converter — Installation
+===================================
+
+This app converts video libraries to H.265/HEVC. FFmpeg is required but is
+NOT included in this download.
+
+1. Extract this folder anywhere on your computer.
+
+2. Install FFmpeg (once per machine):
+
+   macOS:
+     brew install ffmpeg
+
+   Windows:
+     winget install ffmpeg
+     — or —
+     choco install ffmpeg -y
+     (Chocolatey — run in an elevated Command Prompt or PowerShell)
+
+     If those do not work, download a build from:
+     https://www.gyan.dev/ffmpeg/builds/
+     and add the bin folder to your PATH.
+
+   Linux (Debian/Ubuntu):
+     sudo apt install ffmpeg
+
+   Linux (Fedora):
+     sudo dnf install ffmpeg
+
+3. Run the app:
+
+   macOS / Linux:
+     ./transcode_gui/transcode_gui
+
+   Windows:
+     transcode_gui\transcode_gui.exe
+
+Accessibility
+---------------
+For larger text, use your system display zoom or magnifier (Windows Magnifier,
+macOS Zoom, etc.). The app follows your system light/dark mode.
+
+Troubleshooting
+----------------
+- If the app says FFmpeg is missing, open a new terminal after installing and
+  confirm `ffmpeg -version` works.
+- macOS unsigned app: right-click the app → Open.
+- Full documentation: see README in the project repository.

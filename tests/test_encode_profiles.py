@@ -5,8 +5,10 @@ import sys
 
 import pytest
 
+from convert_media import ConversionOptions
 from encode_profiles import (
     DEFAULT_PROFILE,
+    VideoEncodeSettings,
     build_video_encode_args,
     get_profile,
     has_legacy_encode_flags,
@@ -14,9 +16,7 @@ from encode_profiles import (
     prompt_encode_profile,
     resolve_use_hardware,
     settings_from_options,
-    VideoEncodeSettings,
 )
-from convert_media import ConversionOptions
 from media_analysis import estimate_all_profiles, estimate_profile
 
 

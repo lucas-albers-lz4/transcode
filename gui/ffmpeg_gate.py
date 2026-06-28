@@ -15,6 +15,8 @@ def ffmpeg_install_hint() -> str:
         return (
             "Install FFmpeg on Windows:\n\n"
             "  winget install ffmpeg\n\n"
+            "  choco install ffmpeg -y\n"
+            "  (Chocolatey — run in an elevated shell)\n\n"
             "Or download a build from https://www.gyan.dev/ffmpeg/builds/\n"
             "and add the bin folder to your PATH."
         )
