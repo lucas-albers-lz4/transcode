@@ -48,26 +48,45 @@ sudo apt install ffmpeg
 sudo dnf install ffmpeg
 ```
 
-3. Set up a Python virtual environment (optional but recommended):
+3. Set up a Python virtual environment (recommended):
+
 ```bash
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+uv venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 ```
 
+Or use the setup script: `./scripts/setup_dev.sh` (Windows: `scripts\setup_dev.bat`)
+
 4. Install dependencies:
+
 ```bash
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 For the graphical wizard, also install GUI dependencies:
 
 ```bash
-pip install -r requirements-gui.txt
+uv pip install -r requirements-gui.txt
 ```
 
-On Linux you may need the Tk system package: `sudo apt install python3-tk`
+On Linux you also need the Tk system package: `sudo apt install python3-tk`
+
+Check FFmpeg before running: `./scripts/check_prerequisites.sh`
 
 ## Graphical wizard (recommended for most users)
+
+### End users (standalone build)
+
+Download a release zip for your platform, extract it, install FFmpeg (see `INSTALL.txt` in the zip), and run:
+
+- **macOS / Linux:** `./transcode_gui/transcode_gui`
+- **Windows:** `transcode_gui\transcode_gui.exe`
+
+FFmpeg is **not** bundled. On Windows install with `winget install ffmpeg` or `choco install ffmpeg -y`.
+
+**Accessibility:** use your OS display zoom or magnifier for larger text; the app follows system light/dark mode.
+
+### Developers (run from source)
 
 Launch the two-step wizard:
 
@@ -88,15 +107,28 @@ Or use a launcher script:
 
 The app checks that FFmpeg is installed on startup. FFmpeg is **not** bundled — install it separately (see Installation above).
 
-### Building a standalone app (optional)
+### Building a standalone app
 
-Requires `pip install -r requirements-gui.txt` (includes PyInstaller):
+Requires `uv pip install -r requirements-gui.txt` (includes PyInstaller). On Linux, install `python3-tk` first.
 
 ```bash
-pyinstaller packaging/transcode_gui.spec
+./scripts/build_gui.sh
+# Windows: scripts\build_gui.bat
 ```
 
 The built app is under `dist/transcode_gui/`. Users still need FFmpeg on their PATH.
+
+Create a release zip (includes `INSTALL.txt`):
+
+```bash
+./scripts/package_release.sh
+```
+
+Build on each target OS (macOS, Windows, Linux) — PyInstaller does not cross-compile.
+
+**Manual QA:** see [docs/MANUAL_QA_GUI.md](docs/MANUAL_QA_GUI.md)
+
+**macOS unsigned builds:** right-click → Open if Gatekeeper blocks the app.
 
 ## Command-line usage (advanced)
 
