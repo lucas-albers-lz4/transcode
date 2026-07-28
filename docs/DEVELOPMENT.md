@@ -124,7 +124,7 @@ Full-rule audits are for triage only; many findings are intentionally ignored (C
 | Pre-triage baseline | 817 |
 | After curated config + autofix + manual hygiene | 605 |
 
-Baseline artifacts: [`docs/ruff-all-stats.txt`](ruff-all-stats.txt), [`docs/ruff-all-baseline.json`](ruff-all-baseline.json).
+|Baseline artifacts were tracked as `docs/ruff-all-stats.txt` and `docs/ruff-all-baseline.json` (removed after the audit).
 
 ### Intentionally ignored (see `pyproject.toml`)
 
@@ -235,48 +235,7 @@ Baseline artifacts: [`docs/ruff-all-stats.txt`](ruff-all-stats.txt), [`docs/ruff
 * **Orchestration**: `convert_to_h265.py` calls scan, space-check, and convert steps via direct imports; each worker script remains runnable standalone.
 * **GUI**: `transcode_gui.py` uses CustomTkinter and shared helpers in `workflow.py`; profile selection uses `estimate_all_profiles`, not the CLI TTY prompt.
 
-## Notes related to current code:
-### Core Functionality Gaps
-* Missing Batch Processing: Current transcode_file handles single files, no recursive directory traversal
-* No Temp File Handling: Resumability system using .media.mp4.transcoding files not implemented
-* Structure Mirroring: Output path logic in transcode_file uses simple basename (line 320), needs os.path.relpath
 
-### CLI Argument Mismatch
-* Existing args (--analyze, --transcode) conflict with plan's --convert-to-h265
-* Missing --dry-run implementation
-* --output-dir exists but isn't properly utilized for structure mirroring
-
-### Quality Preservation
-* Current CRF is hardcoded to 28 (line 344)
-* Audio handling logic exists (lines 357-400) but needs adjustment for plan's AAC/ALAC rules
-* Hardware encoding uses VideoToolbox but lacks libx265 fallback
-
-### Disk Space Management
-* check_disk_space exists (line 276) but:
-  * Per-file check instead of total estimate
-  * No analyze_directory integration for size prediction
-  * Missing threshold enforcement
-
-### Key Recommendations
-* Refactor CLI Arguments
-  * Remove --analyze/--transcode
-  * Add --convert-to-h265, --dry-run
-  * Make --output-dir required for conversion
-* Implement Recursive Processing
-  * Add find_media_files with directory walking
-  * Add extension filtering (.mkv, .mp4, .m4v, .avi, .mov)
-  * Consider adding probe-based media file detection using ffmpeg for greater flexibility
-* Enhance Error Handling
-  * Add cleanup for failed transcodes
-  * Implement retry logic for IO errors
-  * Add validation for output directory structure
-* Optimize Memory Management
-  * Implement batch processing with resource monitoring
-  * Add parallel processing with thread pool
-* Add Validation Checks
-  * Verify ffmpeg version supports x265
-  * Check filesystem inode limits
-  * Validate output directory permissions
 
 ##UPCOMING WORK
 
