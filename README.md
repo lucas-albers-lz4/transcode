@@ -31,7 +31,7 @@ Batch convert your media files to H.265/HEVC format.
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/transcode.git
+git clone https://github.com/lucas-albers-lz4/transcode.git
 cd transcode
 ```
 
