@@ -5,6 +5,9 @@ on:
     branches: [main, simple-gui, gui-ship]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
