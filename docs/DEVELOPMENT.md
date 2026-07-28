@@ -1,281 +1,200 @@
-# Development Plan: Batch Media Conversion to h265
+# Developer Guide
 
-## Overview
+## Architecture overview
 
-This document outlines the plan for adding a batch media conversion feature to convert media files to h265. The solution uses a modular approach with separate scripts for scanning, analysis, and conversion.
+transcode is a modular batch media transcoder. The system has two entry points — a CLI script and a GUI wizard — that share the same core pipeline.
 
-## Core Functionality
+### Pipeline flow
 
-*   **Input:** A directory path (root directory for the scan).
-*   **Process:**
-    *   Recursively scan the input directory for media files (mkv, mp4, m4v, avi, mov).
-    *   For each file found that is *not* already h265:
-        *   Create a temporary "in-flight" file.
-        *   Determine the corresponding output path.
-        *   Transcode the file to h265.
-        *   Verify the output file integrity.
-        *   Remove the temporary "in-flight" file.
-    *   Skip files that are already h265.
-*   **Output:** Transcoded h265 files in a mirrored directory structure.
+```
+Source directory
+       │
+       ▼
+┌──────────────┐
+│  scan_media  │  Walk directory, identify non-HEVC files, build manifest
+└──────┬───────┘
+       │
+       ▼
+┌──────────────────┐
+│ encode_profiles  │  Pick Archive / Fast / Quality profile (interactive or --profile)
+└──────┬───────────┘
+       │
+       ▼
+┌───────────────┐
+│ analyze_space │  Check available disk space against size estimates
+└───────┬───────┘
+        │
+        ▼
+┌───────────────┐
+│ convert_media │  Transcode each file via ffmpeg with progress + integrity check
+└───────┬───────┘
+        │
+        ▼
+┌────────────────┐
+│ analyze_errors │  Post-conversion error analysis on failures
+└────────────────┘
+```
 
-## Component Architecture
+`ffmpeg_utils.py` provides shared ffprobe/ffmpeg helpers used throughout the pipeline. `workflow.py` bundles the scan → estimate → convert sequence for reuse by both the CLI and GUI.
 
-1. **scan_media.py** ✅
-   * Scans input directory for media files
-   * Identifies non-h265 files
-   * Creates conversion manifest
-   * Preserves directory structure
+---
 
-2. **analyze_space.py** ✅
-   * Checks disk space requirements
-   * Calculates estimated output size
-   * Verifies sufficient space on output volume
+## Component map
 
-3. **convert_media.py** ✅
-   * Handles the actual transcoding
-   * Creates temporary tracking files
-   * Implements audio detection & quality handling
-   * Verifies output file integrity
+| Module | Entry point? | Responsibility |
+|--------|:-----------:|---------------|
+| `convert_to_h265.py` | ✅ CLI | Argument parsing, orchestrates scan → profile → space-check → convert → error analysis |
+| `transcode_gui.py` | ✅ GUI | Launches the CustomTkinter wizard; imports workflow helpers for scan/estimate/convert |
+| `workflow.py` | | Shared helpers: `scan_library()`, `estimate_all_profiles()`, `check_disk_space()`, `run_conversion()` |
+| `scan_media.py` | ✓ | Recursive directory scan, HEVC detection, manifest generation |
+| `convert_media.py` | ✓ | ffmpeg invocation, progress parsing, integrity verification, in-flight tracking |
+| `encode_profiles.py` | ✓ | Defines Archive / Fast / Quality profiles with preset encoder options |
+| `media_analysis.py` | ✓ | Codec probing, encode-method recommendations, per-profile size/time estimates |
+| `analyze_space.py` | ✓ | Disk-space pre-check against estimated output size |
+| `analyze_errors.py` | ✓ | Groups conversion failures by ffmpeg exit code, generates fix hints |
+| `ffmpeg_utils.py` | | Shared helpers: ffprobe probes, HEVC validation, progress parsing, path checks |
+| `encode_profiles.py` | | Profile definitions mapped to encoder kwargs |
+| `benchmark_presets.py` | ✓ | Standalone benchmark runner for HW vs SW comparison |
 
-4. **convert_to_h265.py** ✅
-   * Main controller script
-   * Orchestrates the full workflow
-   * Handles CLI arguments including `--analyze` and `--benchmark`
+Modules marked ✓ can be run as standalone scripts (e.g. `python scan_media.py ...`).
 
-5. **media_analysis.py** ✅
-   * Codec analysis and encode-method recommendations
-   * Analysis table with HW/SW time estimates
-   * Cached results under output directory
+---
 
-6. **ffmpeg_utils.py** ✅
-   * Shared ffprobe/ffmpeg helpers, path checks, progress parsing
-   * HEVC validation and media probing
+## GUI architecture
 
-## Resumability and In-Flight Tracking ✅
+The GUI is built with [CustomTkinter](https://customtkinter.tomschimansky.com/) and lives in the `gui/` package.
 
-*   **Mechanism:** Use temporary files.
-*   **Temporary File Naming:** `output_dir/subdir/media.mp4.transcoding`.
-*   **Process:**
-    1.  Check for the temporary file. Skip if it exists.
-    2.  Create the temporary file before starting `ffmpeg`.
-    3.  Delete the temporary file after `ffmpeg` completes successfully.
-    4.  If transcode fails, delete the temporary file and any partial output.
-*   **Error Handling:** Use `try...finally` for cleanup. Handle file operation errors.
+```
+transcode_gui.py          ─── Entry point; creates TranscodeApp
+  └── gui/app.py          ─── Main wizard window (two-step flow)
+       ├── StepFolders    ─── Step 1: source + destination folder picker
+       ├── StepConvert    ─── Step 2: profile selector, estimates, convert button
+       ├── ffmpeg_gate    ─── FFmpeg availability check on startup
+       ├── workers        ─── Background threads for scan and convert
+       ├── theme          ─── Fonts, colors, layout constants
+       └── log_redirect   ─── Redirects logging to a GUI text widget
+```
 
-## Quality Preservation ✅
+Key design points:
 
-*   **Encoding Settings:**
-    *   **Codec:** `libx265` (software) or `hevc_videotoolbox` (hardware)
-    *   **CRF:** Default 24, `--crf` option for override.
-    *   **Preset:** `medium`.
-    *   **Audio:** 
-        *   ✅ Copy if AAC, no re-encoding to preserve quality
-        *   ✅ Convert AC3/DTS to AAC 192k
-        *   ✅ Convert other formats to AAC 192k
-    *   **Other:** `-movflags +faststart`.
+- **Step flow:** `StepFolders` → user picks folders → scan runs in background via `worker_scan` → on completion, app switches to `StepConvert`
+- **Profile selection:** Uses `estimate_all_profiles()` from `workflow.py` — same logic as the CLI, but rendered with sliders instead of a TTY prompt
+- **Background workers:** `worker_scan` and `worker_convert` run in threads with Queue-based progress reporting to avoid freezing the UI
+- **Cancellation:** `convert_media.request_cancel()` sets a global flag that stops ffmpeg at the next file boundary
 
-## Logging ✅
+---
 
-*   **Mechanism:** Use Python's logging module
-*   **Target:** Both console and log file
-*   **Location:** `output_dir/logs/conversion_TIMESTAMP.log`
-*   **Content:** Progress, errors, warnings, and summary information
+## Test organization
 
-## Output File Verification ✅
+Tests are in `tests/` and use pytest. Each test file mirrors the module it covers:
 
-*   **Mechanism:** Use ffmpeg to verify output file integrity
-*   **Process:** Attempt to decode entire file to null output
-*   **Handling:** Delete and re-encode on failure (when resuming)
-
-## Command-Line Arguments ✅
-
-*   **Primary script:** `convert_to_h265.py`
-*   `input_dir`: Source directory with media files
-*   `output_dir`: Output root directory (specified as a command-line argument for flexibility)
-*   `--crf`: (Optional) CRF value (default: 24)
-*   `--hardware`: (Optional) Use hardware acceleration
-*   `--dry-run`: (Optional) Simulate without transcoding
-*   `--manifest`: (Optional) Use existing manifest file
-*   `--min-free-space`: (Optional) Minimum free space to maintain (default: 10GB)
-*   `--max-files`: (Optional) Maximum number of files to process
-*   `--analyze`: (Optional) Analyze files without converting
-*   `--benchmark FILE`: (Optional) Quick HW vs SW benchmark on one file
-*   `--hw-preset`: (Optional) Hardware encoder preset
-*   `--skip-subtitles`: (Optional) Exclude subtitles from output
-
-## Linting (Ruff)
-
-Daily/CI lint uses the curated rule set in [`pyproject.toml`](../pyproject.toml) (`E`, `F`, `I`, `UP`, `B`, `BLE`, `RUF`, `COM`), not `--select ALL`.
+| Test file | Module under test |
+|-----------|-------------------|
+| `test_scan_media.py` | `scan_media.py` |
+| `test_convert_media.py` | `convert_media.py` |
+| `test_convert_to_h265_analyze.py` | Analysis mode in `convert_to_h265.py` |
+| `test_convert_to_h265_orchestrator.py` | Orchestration in `convert_to_h265.py` |
+| `test_encode_profiles.py` | `encode_profiles.py` |
+| `test_media_analysis.py` | `media_analysis.py` |
+| `test_analyze_space.py` | `analyze_space.py` |
+| `test_analyze_errors.py` | `analyze_errors.py` |
+| `test_ffmpeg_utils.py` | `ffmpeg_utils.py` |
+| `test_workflow.py` | `workflow.py` |
+| `test_ffmpeg_gate.py` | `gui/ffmpeg_gate.py` |
+| `test_gui_workers.py` | `gui/workers.py` |
+| `test_log_redirect.py` | `gui/log_redirect.py` |
+| `test_manifest_profiles.py` | Manifest + profile integration |
 
 ```bash
-ruff check .          # CI target — must pass with zero violations
-ruff format .
 pytest tests/ -q
 ```
 
-Pre-commit runs `ruff` and `ruff-format` via [`.pre-commit-config.yaml`](../.pre-commit-config.yaml).
+---
 
-### Audit baseline (`--select ALL`)
+## Linting and CI
 
-Full-rule audits are for triage only; many findings are intentionally ignored (CLI `print`, subprocess/ffmpeg, docstrings, test `assert`).
+The project uses [Ruff](https://docs.astral.sh/ruff/) for linting and formatting, with a curated rule set defined in [`pyproject.toml`](../pyproject.toml):
 
-| Snapshot | Violations |
-|----------|----------:|
-| Pre-triage baseline | 817 |
-| After curated config + autofix + manual hygiene | 605 |
+```bash
+ruff check .          # CI target — must pass with zero violations
+ruff format .         # auto-format
+```
 
-|Baseline artifacts were tracked as `docs/ruff-all-stats.txt` and `docs/ruff-all-baseline.json` (removed after the audit).
+### Active rules
 
-### Intentionally ignored (see `pyproject.toml`)
+`E`, `F`, `I`, `UP`, `B`, `BLE`, `RUF`, `COM`
 
-- **T201** — CLI tools use `print` for user-facing output
-- **S603/S607** — spawning `ffmpeg`/`ffprobe` is core behavior
-- **FBT001/FBT002** — boolean `argparse` flags
-- **PLW0603** — signal-handler global in `convert_media.py`
-- **tests/** — S101, INP001, D103
-- **benchmark_presets.py** — complexity rules (PLR0912, PLR0915, C901), S108
+### Intentionally ignored
 
-### Deferred follow-up (not required for CI)
+| Rule | Reason |
+|------|--------|
+| `T201` | CLI tools use `print` for user-facing output |
+| `S603`/`S607` | Spawning `ffmpeg`/`ffprobe` is core behavior |
+| `FBT001`/`FBT002` | Boolean `argparse` flags are idiomatic |
+| `PLW0603` | Signal-handler global in `convert_media.py` |
+| `tests/` | `S101` (assert), `INP001` (test layout), `D103` (test docstrings) |
+| `benchmark_presets.py` | Complexity rules (`PLR0912`, `PLR0915`, `C901`), `S108` |
 
-- **PTH*** — migrate `os.path` to `pathlib` incrementally (`convert_media.py`, `scan_media.py` first)
-- **ANN*** — add return/param types on CLI entrypoints only if adopting strict typing project-wide; library modules [`ffmpeg_utils.py`](../ffmpeg_utils.py) and [`media_analysis.py`](../media_analysis.py) already use typed public APIs
-- **PLR/C901** — reduce complexity in `convert_file()` via refactor, not lint-driven edits
+### Pre-commit
 
-## Future Enhancements
+Pre-commit runs `ruff --fix` and `ruff-format` on every commit. See [`.pre-commit-config.yaml`](../.pre-commit-config.yaml).
 
-*   ✅ Cross-platform hardware acceleration
-*   Parallel processing for multiple simultaneous transcodes
-*   Kubernetes deployment for distributed processing
+### CI
 
-## Development Notes
+The [Tests workflow](../.github/workflows/test.yml) runs on every push/PR to `main`:
 
-1. All scripts will have proper error handling and logging ✅
-2. Source files will never be modified or deleted ✅
-3. The system is designed to be resumable after interruption ✅
-4. Focus is on reliability and correctness over performance ✅
-5. Hardware acceleration is supported but not required ✅
+```
+install ffmpeg + python3-tk → uv venv → ruff check . → pytest tests/ -q
+```
 
-## Directory Structure Mirroring ✅
+---
 
-*   Use `os.path.join`, `os.makedirs(..., exist_ok=True)`, `os.path.relpath`.
+## Design decisions
 
-## Disk Space Management ✅
+### File safety
+Source files are **never modified or deleted**. All output goes to a separate destination directory. The pipeline only reads from the source.
 
-*   **Pre-emptive Check:** Calculate *total* estimated output size in `analyze_directory`.
-*   **Estimate:** Use analysis results (codec, CRF, resolution) for a better estimate than a fixed multiplier.
-*   **Threshold:** Minimum free space threshold (e.g., 1GB).
-*   **Error Handling:** Exit with a clear message if insufficient space.
+### Resumability
+A `.transcoding` temp file is created before ffmpeg starts and removed on success. Re-running the same command skips files with valid HEVC output and cleans up stale temp files from interrupted runs. Integrity verification (`ffmpeg -v null -f null ...`) runs on every completed output.
 
-## Implementation Steps
+### Audio handling
+- AAC streams are copied without re-encoding to preserve quality
+- AC3/DTS and other formats are converted to AAC 192 kbps
+- Original channel count is preserved where possible
 
-1.  **Command-Line Arguments:** ✅
-    *   Implement `--convert-to-h265`, `--hardware`, `--crf`, `--dry-run`.
-    *   Remove `--analyze` and `--transcode`.
+### Hardware acceleration
+| Platform | Encoder | Detection |
+|----------|---------|-----------|
+| macOS | `hevc_videotoolbox` | FFmpeg build check |
+| Linux (NVIDIA) | `hevc_nvenc` | `ffmpeg -encoders \| grep nvenc` |
+| Fallback | `libx265` (software) | Automatic if hardware unavailable |
 
-2.  **Modify `analyze_directory`:** ✅
-    *   When `--convert-to-h265`:
-        *   Filter for non-h265 files.
-        *   Calculate *total* estimated output size.
+If NVENC is unsupported, the system falls back to software with a clear message.
 
-3.  **Modify `transcode_file`:** ✅
-    *   Condition: Only execute if `--convert-to-h265`.
-    *   **In-Flight Tracking:**
-        *   Calculate temporary file path.
-        *   Check/create/delete temporary file (with error handling).
-        *   Use `try...finally` for cleanup.
-    *   **Output Path:**
-        *   `os.path.relpath`, `os.path.join`.
-        *   Insert `.h265` in filename.
-    *   **Encoding Settings:**
-        *   `libx265` or `--hardware`.
-        *   `--crf` value.
-    *   **Transcoding/Cleanup:**
-        *   `ffmpeg` command.
-        *   Delete temp file on success.
-        *   Delete temp file *and* partial output on failure.
+### Output format
+- Container: MP4 or MKV (mirrors source)
+- `-movflags +faststart` for MP4 (web-optimized)
+- Output directory mirrors source directory structure via `os.path.relpath`
 
-4.  **Update `main`:** ✅
-    *   Parse arguments.
-    *   Call `analyze_directory` and `transcode_file`.
-    *   **Disk Space Check:** Before transcoding, check total estimated size against available space.
+### Profile selection (CLI)
+The interactive profile picker presents three options with per-file time and size estimates. `--profile archive|fast|quality` skips the prompt. A `-y` flag defaults to Archive.
 
-5.  **Testing:** (Comprehensive testing as before).
+### Profile selection (GUI)
+The GUI uses the same `estimate_all_profiles()` function from `workflow.py`. Estimates are displayed as a slider; no TTY prompt is involved.
 
-## Implemented Improvements
+---
 
-* ✅ **Intelligent Audio Handling**: Now preserves AAC audio streams without re-encoding
-* ✅ **Enhanced Progress Monitoring**: Live display of progress percentage, encoding FPS, CPU and RAM usage
-* ✅ **Performance Optimizations**: Eliminated unused variables and optimized memory usage
-* ✅ **Hardware Acceleration Support**: Added support for VideoToolbox on macOS
-* ✅ **Cross-Platform Hardware Support**: Added NVIDIA GPU support on Linux with fallback
-* ✅ **Enhanced Hardware Detection**: Improved detection of NVENC support in FFmpeg for better guidance
-* ✅ **Improved Error Handling**: Added cleanup for failed transcodes and better error reporting
-* ✅ **Dry Run Mode**: Added ability to preview conversion operations without executing them
-* ✅ **Signal Handling**: Added support for graceful termination with SIGINT/SIGTERM
-* ✅ **Path Resolution**: Fixed script path resolution to handle execution from any directory
-* ✅ **Directory Management**: Added validation for output directory permissions and improved creation handling
+## Upcoming work
 
-## Pending Tasks
+See [TODO.md](TODO.md) for the current task list. Major areas:
 
-* Add parallel processing for multiple simultaneous transcodes
-* Add retry logic for IO errors
-* Add detailed installation instructions for FFmpeg with NVENC support
+- Parallel transcodes (multi-file at once)
+- Per-codec disk-space estimates in `analyze_space.py`
+- Ruff deferred rules: `PTH*` pathlib migration, `ANN*` type annotations on CLI entrypoints
+- `--auto-encoder` flag to apply `determine_encode_method()` during conversion (not just analysis)
 
-## Design Decisions
+---
 
-* **File Handling**: The system will process .mkv, .mp4, .m4v, .avi, and .mov extensions. Current implementation already includes all of these extensions in `convert_media.py` on line 520. Future enhancement: use ffmpeg's capability to identify valid media files regardless of extension.
-* **Output Directory**: Output path is specified as a command-line argument for maximum flexibility. The system will attempt to create the output directory if it doesn't exist and validate that it is writable.
-* **Overwrite Behavior**: If an output file already exists (and is not zero-sized), it will be skipped to support resumability.
-* **Script Location**: The system now uses absolute paths to find component scripts regardless of the current working directory.
-* **Cross-Platform Hardware Support**: The system now supports hardware acceleration on:
-  * macOS: Using VideoToolbox encoder
-  * Linux: Using NVIDIA NVENC encoder with graceful fallback to software
-* **Hardware Acceleration Fallback**: The system now properly detects when FFmpeg lacks NVENC support and falls back to software encoding with helpful instructions
-* **Directory Creation and Permission Handling**: The system now properly creates output directories with error handling and validates write permissions before starting transcoding.
-* **Orchestration**: `convert_to_h265.py` calls scan, space-check, and convert steps via direct imports; each worker script remains runnable standalone.
-* **GUI**: `transcode_gui.py` uses CustomTkinter and shared helpers in `workflow.py`; profile selection uses `estimate_all_profiles`, not the CLI TTY prompt.
+## Getting started
 
-
-
-##UPCOMING WORK
-
-1. **File Permission Handling**
-   * Add verification of input file readability
-   * Generate sudo command for fixing file permissions
-   * Skip unreadable files with appropriate warnings
-
-2. **Subtitle Handling**
-   * Fix issue with subtitle streams causing encoder failures
-   * Add proper subtitle codec selection for mp4 containers
-   * Implement option to copy subtitle streams or remove them
-   * Explicitly set a compatible subtitle codec for MP4 containers
-   * Detect subtitle streams with a dedicated function
-   * For MP4 output files, explicitly set the subtitle codec to mov_text
-   * For other containers like MKV, copy the subtitles
-   
-3. **Error Analysis Tool**
-   * Create a Python script to analyze conversion logs
-   * Group errors by ffmpeg exit codes
-   * Extract context for each error type
-   * Generate recommended fixes for common error patterns
-
-4. **Timestamp/DTS Issues Fix**
-   * Handle "non monotonically increasing dts" errors
-   * Add proper timestamp correction for problematic MKV files
-   * Implement -fflags +genpts option for problematic inputs
-   * Add container format compatibility checks
-
-5. **NVENC Resolution Compatibility** ✅
-   * Implement smart handling of attached images in media files
-   * Add stream-specific encoding based on resolution checks
-   * Handle attached pictures below NVENC minimum resolution
-   * Optimize encoder selection for embedded media
-   
-   **Implementation details:**
-   * Added probing of input files to identify attached pictures
-   * Implemented resolution checking against NVENC minimum requirements (256x256)
-   * Modified stream mapping to copy small image attachments instead of failing
-   * Added fallback to software encoding for specific streams when necessary
-   * Maintained hardware acceleration for main video and large attachments
-   * Added detailed logging to inform users when streams are copied due to size limitations
-   * Implemented robust error handling with graceful fallbacks
+For dev setup, build instructions, and contribution workflow, see [CONTRIBUTING.md](../CONTRIBUTING.md).
