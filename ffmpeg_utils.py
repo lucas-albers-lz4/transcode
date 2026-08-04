@@ -68,7 +68,7 @@ def warn_ffmpeg_version_range(min_major: int = 6, max_tested_major: int = 9) -> 
     if major < min_major:
         print(
             f"WARNING: FFmpeg {major}.x is below the supported range "
-            f"({min_major}.x–{max_tested_major}.x). Upgrade if encodes fail.",
+            f"({min_major}.x-{max_tested_major}.x). Upgrade if encodes fail.",
         )
     elif major > max_tested_major:
         print(

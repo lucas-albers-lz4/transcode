@@ -1,5 +1,7 @@
 # User Guide
 
+Prefer the [GUI download from Releases](https://github.com/lucas-albers-lz4/transcode/releases) if you want a wizard. This guide covers the CLI in depth and documents the same profiles the GUI uses.
+
 ## Installing FFmpeg
 
 The transcoder needs FFmpeg on your system PATH. If you don't have it yet:
