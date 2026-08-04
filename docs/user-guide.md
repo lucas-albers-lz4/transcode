@@ -1,5 +1,7 @@
 # User Guide
 
+Prefer the [GUI download from Releases](https://github.com/lucas-albers-lz4/transcode/releases) if you want a wizard. This guide covers the CLI in depth and documents the same profiles the GUI uses.
+
 ## Installing FFmpeg
 
 The transcoder needs FFmpeg on your system PATH. If you don't have it yet:
@@ -58,9 +60,12 @@ For NVENC support on Linux, use the static builds from [johnvansickle.com/ffmpeg
 
 | Issue | Fix |
 |-------|-----|
-| "FFmpeg not found" | Install FFmpeg and restart the app. Open a new terminal after installing. |
+| "FFmpeg not found" | Install FFmpeg and restart the app. Open a new terminal after installing. See [FAQ](../FAQ.md#the-app-says-ffmpeg-is-missing--i-just-installed-it). |
 | `TclError: no display` | Install `python3-tk` (Linux). On SSH, use the CLI instead. |
-| macOS "app is damaged" | Right-click → Open (Gatekeeper override for unsigned builds). |
+| macOS "app is damaged" | Right-click → Open (Gatekeeper override for unsigned builds). See [FAQ](../FAQ.md). |
+| Want a safe sample first | On Step 2, set **Test first N files** to a small number (e.g. `1` or `3`), then start. Or use CLI `--max-files N`, `--dry-run`, or `--analyze`. |
+
+Your originals are never modified. Cancel stops after the current file; already-converted outputs remain. Start again to resume (valid HEVC outputs are skipped).
 
 ---
 
@@ -81,6 +86,8 @@ Press **Enter** to accept the Archive profile, or type `1` (Fast), `2` (Quality)
 | **Archive** (default) | Library storage; balanced | Auto HW/SW · x265 medium or NVENC p5 · CRF/CQ ~24 | Medium | Baseline |
 | **Fast** | Bulk transcodes when speed matters | NVENC p3 · CQ 28 | Fastest | ~10–30% larger |
 | **Quality** | Best picture · CPU only · small batches | x265 slow · CRF 20 · no GPU | Slowest | ~15–25% smaller |
+
+**Archive** picks hardware or software **per file** during conversion (same recommendation as `--analyze`). Fast forces hardware when available; Quality always uses software `libx265`.
 
 ### All options
 

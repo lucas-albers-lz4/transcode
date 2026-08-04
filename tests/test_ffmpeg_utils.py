@@ -3,6 +3,7 @@
 import pytest
 
 from ffmpeg_utils import (
+    parse_ffmpeg_major_version,
     parse_ffmpeg_progress_line,
     parse_frame_rate,
     path_within_root,
@@ -58,3 +59,16 @@ class TestParseFfmpegProgressLine:
 
     def test_empty_line(self):
         assert parse_ffmpeg_progress_line("", 60.0) == {}
+
+
+class TestParseFfmpegMajorVersion:
+    def test_parses_major(self):
+        text = "ffmpeg version 9.0 Copyright (c) 2000-2026 the FFmpeg developers\n"
+        assert parse_ffmpeg_major_version(text) == 9
+
+    def test_parses_six(self):
+        text = "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023\n"
+        assert parse_ffmpeg_major_version(text) == 6
+
+    def test_missing(self):
+        assert parse_ffmpeg_major_version("not ffmpeg") is None

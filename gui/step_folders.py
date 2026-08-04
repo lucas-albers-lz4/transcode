@@ -26,7 +26,11 @@ class StepFolders(ctk.CTkFrame):
 
         ctk.CTkLabel(
             self,
-            text="Pick where your videos are and where converted files should be saved.",
+            text=(
+                "Pick where your videos are and where converted files should be saved. "
+                "Your originals are never modified or deleted — output goes only to the "
+                "destination folder."
+            ),
             wraplength=520,
             text_color=TEXT,
         ).pack(anchor="w", padx=24, pady=(0, 16))

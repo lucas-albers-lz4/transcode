@@ -1,24 +1,22 @@
 # H.265 (HEVC) Batch Media Transcoder
 
-Batch-convert your media library to H.265/HEVC format — with a GUI wizard or CLI.
+Shrink a personal video library to H.265/HEVC without touching the originals — pick two folders and convert with a GUI wizard, or use the CLI overnight.
 
 [![Tests](https://github.com/lucas-albers-lz4/transcode/actions/workflows/test.yml/badge.svg)](https://github.com/lucas-albers-lz4/transcode/actions/workflows/test.yml)
 
-## Features
+**Why try it**
 
-- **Intelligent format detection** — skips files already in HEVC
-- **No source modification** — original files are never touched
-- **Smart audio handling** — copies AAC without re-encoding, converts others to AAC 192k
-- **Cross-platform** — macOS (VideoToolbox) and Linux (NVENC / software)
-- **Resumable** — interrupt and re-run; already-converted files are skipped
-- **Directory structure preservation** — mirrors source layout in output
-- **Integrity verification** — validates every output file after conversion
-- **Three encoding profiles** — Archive (balanced), Fast (speed), Quality (best compression)
-- **Analysis mode** — preview codec info, encode recommendations, and size estimates without converting
+- **Never modifies source files** — output goes only to a separate destination folder
+- **Resume-safe** — cancel anytime; already-converted HEVC outputs are skipped on the next run
+- **Skips files already in HEVC** — no wasted re-encodes
+- **Estimate before you commit** — size and time previews for Archive, Fast, and Quality profiles
+- **Hardware when it helps** — Archive auto-picks NVENC / VideoToolbox or software `libx265` per file
 
-## Quick start
+![GUI wizard — choose folders, pick a profile, convert](docs/images/gui-wizard.png)
 
-### 1. Install FFmpeg
+## Download (recommended)
+
+1. Install **FFmpeg 6.x–9.x** once (not bundled):
 
 ```bash
 # macOS
@@ -34,46 +32,44 @@ sudo dnf install ffmpeg
 winget install ffmpeg
 ```
 
-### 2. Run the GUI wizard (recommended)
-
-Download the latest release from the [Releases page](https://github.com/lucas-albers-lz4/transcode/releases), extract it, and run:
+2. Download the latest build from the [Releases page](https://github.com/lucas-albers-lz4/transcode/releases), extract it, and run:
 
 ```bash
 ./transcode_gui/transcode_gui          # macOS / Linux
 transcode_gui\transcode_gui.exe        # Windows
 ```
 
-FFmpeg must be installed separately — it is **not** bundled. See `INSTALL.txt` in the release zip for platform-specific instructions.
+See `INSTALL.txt` in the zip for platform notes. On macOS unsigned builds: right-click → Open (Gatekeeper). If the app says FFmpeg is missing after install, open a new terminal and confirm `ffmpeg -version` — see the [FAQ](FAQ.md).
 
-### 3. Or use the CLI
+**Common questions:** [Why is my output bigger?](FAQ.md#why-is-my-output-file-bigger-than-the-input) · [FFmpeg installed but app says missing](FAQ.md#the-app-says-ffmpeg-is-missing--i-just-installed-it) · [Which FFmpeg versions?](FAQ.md#which-ffmpeg-versions-are-supported)
+
+## Or use the CLI
 
 ```bash
-# Clone and set up
 git clone https://github.com/lucas-albers-lz4/transcode.git
 cd transcode
 uv venv && source .venv/bin/activate
 uv pip install -r requirements.txt
 
-# Convert your library
 ./convert_to_h265.py /path/to/source /path/to/destination
 ```
 
-See the [user guide](docs/user-guide.md) for all CLI options, profiles, and examples.
+Full options, profiles, and examples: [user guide](docs/user-guide.md).
 
 ## Requirements
 
-- Python 3.8+
-- FFmpeg with appropriate hardware support (see [install guide](docs/user-guide.md#installing-ffmpeg))
-- Sufficient disk space for output files
+- FFmpeg 6.x–9.x on PATH (`libx265`; optional `hevc_nvenc` / `hevc_videotoolbox`)
+- For the GUI from source: Python 3.8+ and `requirements-gui.txt`
+- Enough free disk space for the destination copies
 
 ## Documentation
 
 | Document | Audience | Contents |
 |----------|----------|----------|
 | [User guide](docs/user-guide.md) | End users | Full CLI reference, GUI walkthrough, profiles, examples |
+| [FAQ](FAQ.md) | All users | Common questions and troubleshooting |
 | [Building](docs/building.md) | Developers | PyInstaller build, packaging, cross-platform notes |
 | [Contributing](CONTRIBUTING.md) | Contributors | Architecture, dev setup, linting, testing |
-| [FAQ](FAQ.md) | All users | Common questions and troubleshooting |
 | [Development guide](docs/DEVELOPMENT.md) | Developers | Architecture deep-dive, design decisions, linting reference |
 
 ## License

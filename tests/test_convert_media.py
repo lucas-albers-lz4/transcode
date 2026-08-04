@@ -229,14 +229,23 @@ def test_run_conversion_progress_callback(tmp_path, monkeypatch):
 
     monkeypatch.setattr("convert_media.count_job_progress", fake_count_job_progress)
 
-    updates: list[tuple[int, int, bool]] = []
+    updates: list[tuple[int, int, bool, str]] = []
 
-    def on_progress(completed: int, total: int, converting: bool) -> None:
-        updates.append((completed, total, converting))
+    def on_progress(
+        completed: int,
+        total: int,
+        converting: bool,
+        current_file: str = "",
+    ) -> None:
+        updates.append((completed, total, converting, current_file))
 
     assert run_conversion(
         manifest_path,
         ConversionOptions(dry_run=True),
         on_progress=on_progress,
     ) == 0
-    assert updates == [(2, 40, True), (2, 40, True), (3, 40, False)]
+    assert len(updates) == 3
+    assert updates[0][0:3] == (2, 40, True)
+    assert updates[1][0:3] == (2, 40, True)
+    assert updates[1][3]  # current file set while converting
+    assert updates[2][0:3] == (3, 40, False)

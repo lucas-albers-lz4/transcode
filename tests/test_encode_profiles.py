@@ -72,6 +72,13 @@ def test_quality_profile_ui_copy():
     assert "CPU only" in profile.description
     assert "small batches" in profile.description
     assert "no GPU" in profile.settings_summary
+    assert "Smaller files" in profile.description
+
+
+def test_archive_profile_ui_copy():
+    profile = get_profile("archive")
+    assert "Balanced" in profile.description
+    assert "GPU or CPU" in profile.description
 
 
 def test_has_legacy_encode_flags_defaults_false():
@@ -124,6 +131,30 @@ def test_build_video_encode_args_software():
     args, message = build_video_encode_args(settings, use_hardware=False)
     assert args == ["-c:v", "libx265", "-preset", "slow", "-crf", "20"]
     assert "software" in message.lower()
+
+
+def test_build_video_encode_args_nvenc_uses_modern_presets(monkeypatch):
+    import platform
+
+    import encode_profiles as ep
+
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(ep, "check_nvenc_available", lambda: True)
+    settings = VideoEncodeSettings(
+        crf=24,
+        nvenc_cq=26,
+        software_preset="medium",
+        hw_preset="p5",
+        vt_preset="quality",
+        use_hardware=True,
+        auto_hardware=False,
+        archive=False,
+    )
+    args, message = build_video_encode_args(settings, use_hardware=True)
+    assert args[0:2] == ["-c:v", "hevc_nvenc"]
+    assert "-preset" in args and args[args.index("-preset") + 1] == "p5"
+    assert "-cq" in args and args[args.index("-cq") + 1] == "26"
+    assert "NVENC" in message
 
 
 def test_resolve_use_hardware_quality_profile():

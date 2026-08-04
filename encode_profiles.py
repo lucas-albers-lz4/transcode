@@ -37,7 +37,7 @@ PROFILES: dict[str, EncodeProfile] = {
     "archive": EncodeProfile(
         name="archive",
         label="Archive",
-        description="library-ready, slow & thorough",
+        description="Balanced size and speed — recommended for libraries. Picks GPU or CPU per file.",
         crf=24,
         nvenc_cq=26,
         use_hardware=None,
@@ -53,7 +53,7 @@ PROFILES: dict[str, EncodeProfile] = {
     "fast": EncodeProfile(
         name="fast",
         label="Fast",
-        description="bulk transcode, good enough quality",
+        description="Faster conversion, larger files — good when speed matters more than size.",
         crf=28,
         nvenc_cq=28,
         use_hardware=True,
@@ -69,7 +69,7 @@ PROFILES: dict[str, EncodeProfile] = {
     "quality": EncodeProfile(
         name="quality",
         label="Quality",
-        description="best picture · CPU only · small batches",
+        description="Smaller files, slower encode — CPU only; best for small batches.",
         crf=20,
         nvenc_cq=20,
         use_hardware=False,

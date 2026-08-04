@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import customtkinter as ctk
 
 from encode_profiles import DEFAULT_PROFILE, PROFILE_NAMES
@@ -71,7 +73,18 @@ class StepConvert(ctk.CTkFrame):
         self.summary = ctk.CTkLabel(
             self.body, text="", wraplength=520, text_color=TEXT,
         )
-        self.summary.pack(anchor="w", padx=24, pady=(0, 12))
+        self.summary.pack(anchor="w", padx=24, pady=(0, 4))
+
+        self.safety_label = ctk.CTkLabel(
+            self.body,
+            text=(
+                "Source files stay untouched. Cancel anytime — finished outputs are kept; "
+                "start again to resume. Use “Test first N files” below to try a small batch."
+            ),
+            wraplength=520,
+            text_color=TEXT_SECONDARY,
+        )
+        self.safety_label.pack(anchor="w", padx=24, pady=(0, 12))
 
         self.cards_frame = ctk.CTkFrame(self.body, fg_color="transparent")
         self.cards_frame.pack(fill="x", padx=24, pady=8)
@@ -126,6 +139,22 @@ class StepConvert(ctk.CTkFrame):
         )
         self.space_status_label.pack(anchor="w")
 
+        test_row = ctk.CTkFrame(self.body, fg_color="transparent")
+        test_row.pack(fill="x", padx=24, pady=(8, 0))
+        ctk.CTkLabel(
+            test_row,
+            text="Test first N files (0 = all):",
+            anchor="w",
+            text_color=TEXT,
+        ).pack(side="left")
+        self.max_files_var = ctk.StringVar(value="0")
+        self.max_files_entry = ctk.CTkEntry(
+            test_row,
+            width=64,
+            textvariable=self.max_files_var,
+        )
+        self.max_files_entry.pack(side="left", padx=(8, 0))
+
         self.details_frame = ctk.CTkFrame(self.body, fg_color="transparent")
         self.details_frame.pack(fill="x", padx=24, pady=(8, 0))
 
@@ -148,7 +177,7 @@ class StepConvert(ctk.CTkFrame):
         )
         self.status_label.pack(anchor="w", padx=24, pady=(12, 4))
 
-        self.progress = ctk.CTkProgressBar(self.body, mode="indeterminate")
+        self.progress = ctk.CTkProgressBar(self.body, mode="determinate")
         self.progress.set(0)
 
     def set_scan_data(self, data: dict) -> None:
@@ -273,10 +302,14 @@ class StepConvert(ctk.CTkFrame):
             radio.pack(anchor="w", padx=12, pady=(10, 0))
 
             desc = info.get("description", "")
+            encoder_line = ""
+            if name == DEFAULT_PROFILE and est.get("encoder_summary"):
+                encoder_line = f"\n{est['encoder_summary']}"
             detail = (
                 f"~{est.get('output_gb', 0):.1f} GB output · "
                 f"~{est.get('time_display', '?')} · "
                 f"{info.get('settings_summary', '')}"
+                f"{encoder_line}"
             )
             detail_label = ctk.CTkLabel(
                 card,
@@ -324,13 +357,21 @@ class StepConvert(ctk.CTkFrame):
             else:
                 frame.configure(border_width=0)
 
+    def _current_max_files(self) -> int:
+        raw = self.max_files_var.get().strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            return 0
+        return max(0, value)
+
     def _handle_start(self) -> None:
         if self._scan_data is None:
             return
         profile = self.selected_profile.get()
         if self._free_gb < self._required_gb(profile):
             return
-        self.on_start(profile, self._current_min_free_gb())
+        self.on_start(profile, self._current_min_free_gb(), self._current_max_files())
 
     def _handle_cancel(self) -> None:
         self.start_btn.configure(state="disabled")
@@ -352,23 +393,35 @@ class StepConvert(ctk.CTkFrame):
                 text="Cancel",
                 command=self._handle_cancel,
             )
+            self.max_files_entry.configure(state="disabled")
             self.progress.pack(fill="x", padx=24, pady=4, after=self.status_label)
-            self.progress.start()
+            self.progress.set(0)
         else:
             self.start_btn.configure(
                 text="Start conversion",
                 command=self._handle_start,
             )
-            self.progress.stop()
+            self.max_files_entry.configure(state="normal")
             self.progress.pack_forget()
             self._update_space_display()
 
     def set_status(self, text: str) -> None:
         self.status_label.configure(text=text)
 
-    def set_convert_progress(self, completed: int, total: int, converting: bool) -> None:
+    def set_convert_progress(
+        self,
+        completed: int,
+        total: int,
+        converting: bool,
+        current_file: str = "",
+    ) -> None:
+        safe_total = max(total, 1)
+        fraction = min(1.0, max(0.0, completed / safe_total))
+        self.progress.set(fraction)
+        name = Path(current_file).name if current_file else ""
         if converting and completed < total:
-            self.set_status(f"Converting… {completed} / {total} completed")
+            suffix = f" — {name}" if name else ""
+            self.set_status(f"Converting… {completed} / {total} completed{suffix}")
         else:
             self.set_status(f"{completed} / {total} completed")
 

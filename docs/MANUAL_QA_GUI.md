@@ -13,10 +13,11 @@ Use test folders only if a production transcode job is running elsewhere.
 | Area | Steps | Pass |
 |------|-------|------|
 | FFmpeg gate | Temporarily hide ffmpeg from PATH; launch app → install hint + Quit | |
-| Step 1 | Browse source + destination; Next triggers scan with progress | |
-| Step 2 | Switch Archive / Fast / Quality; space slider updates lines | |
+| Step 1 | Browse source + destination; safety copy visible; Next triggers scan with progress | |
+| Step 2 | Switch Archive / Fast / Quality; plain-English blurbs; Archive shows encoder_summary | |
 | Step 2 | “Enough space” shows time-to-complete line when space OK | |
-| Convert | Start; status shows `Converting… X / Y completed` | |
+| Step 2 | Set Test first N files to `1`; Start converts only one file | |
+| Convert | Start; status shows `Converting… X / Y completed` + current filename; determinate bar advances | |
 | Details | Show details → log appears; Hide details stays above log | |
 | Cancel/resume | Convert 2 files, Cancel, Start again → `2 / Y` then continues | |
 | Done | Success message; Open output folder works | |

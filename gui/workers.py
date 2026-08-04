@@ -83,6 +83,7 @@ def worker_convert(
     profile_name: str,
     output_dir: Path,
     min_free_gb: float = 10.0,
+    max_files: int = 0,
 ) -> None:
     """Check disk space and run conversion."""
     try:
@@ -94,13 +95,23 @@ def worker_convert(
             return
 
         queue.put(("status", "Starting conversion…"))
-        options = conversion_options_for_profile(profile_name)
+        options = conversion_options_for_profile(profile_name, max_files=max_files)
 
-        def report_progress(completed: int, total: int, converting: bool) -> None:
+        def report_progress(
+            completed: int,
+            total: int,
+            converting: bool,
+            current_file: str = "",
+        ) -> None:
             queue.put(
                 (
                     "convert_progress",
-                    {"completed": completed, "total": total, "converting": converting},
+                    {
+                        "completed": completed,
+                        "total": total,
+                        "converting": converting,
+                        "current_file": current_file,
+                    },
                 ),
             )
 
