@@ -88,12 +88,14 @@ This excludes all subtitle streams from the output.
 
 ## Can I resume an interrupted conversion?
 
-Yes. Re-run the same command. The system:
+Yes. Re-run the same command (or start conversion again in the GUI). The system:
 1. Skips files with valid existing HEVC output (integrity-verified)
 2. Cleans up any `.transcoding` temp files from the interrupted run
 3. Continues from where it left off
 
-This works because each output file is verified after conversion and tracked via temporary "in-flight" markers.
+This works because each output file is verified after conversion and tracked via temporary "in-flight" markers. Cancel does **not** delete finished outputs.
+
+In the GUI, use **Test first N files** on Step 2 to convert only a few files before committing to the full library. On the CLI, use `--max-files N`, `--dry-run`, or `--analyze`.
 
 ## Does the tool delete my original files?
 

@@ -58,9 +58,12 @@ For NVENC support on Linux, use the static builds from [johnvansickle.com/ffmpeg
 
 | Issue | Fix |
 |-------|-----|
-| "FFmpeg not found" | Install FFmpeg and restart the app. Open a new terminal after installing. |
+| "FFmpeg not found" | Install FFmpeg and restart the app. Open a new terminal after installing. See [FAQ](../FAQ.md#the-app-says-ffmpeg-is-missing--i-just-installed-it). |
 | `TclError: no display` | Install `python3-tk` (Linux). On SSH, use the CLI instead. |
-| macOS "app is damaged" | Right-click → Open (Gatekeeper override for unsigned builds). |
+| macOS "app is damaged" | Right-click → Open (Gatekeeper override for unsigned builds). See [FAQ](../FAQ.md). |
+| Want a safe sample first | On Step 2, set **Test first N files** to a small number (e.g. `1` or `3`), then start. Or use CLI `--max-files N`, `--dry-run`, or `--analyze`. |
+
+Your originals are never modified. Cancel stops after the current file; already-converted outputs remain. Start again to resume (valid HEVC outputs are skipped).
 
 ---
 

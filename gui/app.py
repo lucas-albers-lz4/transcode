@@ -122,7 +122,12 @@ class TranscodeApp(ctk.CTk):
         )
         self._worker.start()
 
-    def _start_convert(self, profile_name: str, min_free_gb: float) -> None:
+    def _start_convert(
+        self,
+        profile_name: str,
+        min_free_gb: float,
+        max_files: int = 0,
+    ) -> None:
         if not self._manifest_path or not self._output_dir:
             return
         self.step_convert.set_converting(True)
@@ -135,6 +140,7 @@ class TranscodeApp(ctk.CTk):
                 profile_name,
                 self._output_dir,
                 min_free_gb,
+                max_files,
             ),
             daemon=True,
         )
@@ -174,6 +180,7 @@ class TranscodeApp(ctk.CTk):
                     int(payload["completed"]),
                     int(payload["total"]),
                     bool(payload["converting"]),
+                    str(payload.get("current_file", "")),
                 )
         elif event == "scan_done":
             self.step_folders.set_busy(False, "")

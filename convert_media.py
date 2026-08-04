@@ -705,7 +705,7 @@ class ConversionOptions:
 def run_conversion(
     manifest_path: str | Path,
     options: ConversionOptions,
-    on_progress: Callable[[int, int, bool], None] | None = None,
+    on_progress: Callable[[int, int, bool, str], None] | None = None,
 ) -> int:
     """Convert files listed in manifest. Returns 0 on success, 1 on failure."""
     if not check_ffmpeg_dependencies(warn_nvenc=True):
@@ -755,7 +755,7 @@ def run_conversion(
     completed_count, job_total = count_job_progress(input_dir, output_dir)
 
     if on_progress:
-        on_progress(completed_count, job_total, True)
+        on_progress(completed_count, job_total, True, "")
 
     for i, file_info in enumerate(files):
         if cancel_requested:
@@ -774,7 +774,7 @@ def run_conversion(
             continue
 
         if on_progress:
-            on_progress(completed_count, job_total, True)
+            on_progress(completed_count, job_total, True, file_info["input_path"])
 
         success = convert_file(
             file_info["input_path"],
@@ -808,7 +808,7 @@ def run_conversion(
 
         completed_count, job_total = count_job_progress(input_dir, output_dir)
         if on_progress:
-            on_progress(completed_count, job_total, False)
+            on_progress(completed_count, job_total, False, file_info["input_path"])
 
     print(f"\nConversion complete: {success_count} succeeded, {fail_count} failed")
     if fail_count > 0:

@@ -72,6 +72,13 @@ def test_quality_profile_ui_copy():
     assert "CPU only" in profile.description
     assert "small batches" in profile.description
     assert "no GPU" in profile.settings_summary
+    assert "Smaller files" in profile.description
+
+
+def test_archive_profile_ui_copy():
+    profile = get_profile("archive")
+    assert "Balanced" in profile.description
+    assert "GPU or CPU" in profile.description
 
 
 def test_has_legacy_encode_flags_defaults_false():

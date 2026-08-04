@@ -76,18 +76,28 @@ def test_worker_convert_emits_progress_and_done(tmp_path, monkeypatch):
     monkeypatch.setattr(workers, "reset_cancel", lambda: None)
 
     def fake_run_convert(manifest_path, options, on_progress=None):
+        assert options.max_files == 3
         if on_progress:
-            on_progress(1, 5, True)
-            on_progress(2, 5, False)
+            on_progress(1, 5, True, "/media/ep1.mkv")
+            on_progress(2, 5, False, "/media/ep1.mkv")
         return 0
 
     monkeypatch.setattr(workers, "run_convert", fake_run_convert)
 
-    workers.worker_convert(queue, str(manifest), "archive", tmp_path, min_free_gb=10.0)
+    workers.worker_convert(
+        queue,
+        str(manifest),
+        "archive",
+        tmp_path,
+        min_free_gb=10.0,
+        max_files=3,
+    )
     events = _drain_events(queue)
     kinds = [e[0] for e in events]
 
     assert "convert_progress" in kinds
+    progress = next(e[1] for e in events if e[0] == "convert_progress")
+    assert progress["current_file"] == "/media/ep1.mkv"
     assert "convert_done" in kinds
 
 
