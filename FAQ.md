@@ -58,6 +58,19 @@ If running over SSH, you also need an X server or use the CLI (`convert_to_h265.
 
 **Archive** is the recommended default for most users. **Fast** trades size for speed — useful when you need to convert many files quickly. **Quality** produces the smallest files with the best visual quality but takes significantly longer.
 
+With **Archive**, hardware vs software is chosen **per file** during convert (same logic as `--analyze`): typically hardware for 1080p-class material when NVENC/VideoToolbox is available, software for 4K / archival-leaning cases. Fast always prefers hardware; Quality always uses `libx265`.
+
+## Which FFmpeg versions are supported?
+
+Supported range: **FFmpeg 6.x through 9.x** (including 8.x).
+
+- The app calls `ffmpeg` and `ffprobe` on your PATH; it does not bundle FFmpeg.
+- Software encoding uses `libx265` with `-preset` and `-crf`.
+- NVIDIA encoding uses modern NVENC flags: `hevc_nvenc -preset p1`…`p7` and `-cq` (not legacy aliases like `hq` / `slow`).
+- Apple encoding uses `hevc_videotoolbox`.
+
+Check your version with `ffmpeg -version`. Distro packages (e.g. Ubuntu 6.x) are fine. Homebrew, winget, and [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) builds commonly ship 7+. If NVENC fails after upgrading FFmpeg, confirm `ffmpeg -encoders | grep hevc_nvenc` still lists the encoder and that your NVIDIA driver / Video Codec SDK meets FFmpeg’s requirements (FFmpeg 9+ needs SDK 11.1+).
+
 ## Can I convert subtitles?
 
 Yes. By default, subtitle streams are included in the output. The handling depends on the output container:

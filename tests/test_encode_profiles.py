@@ -126,6 +126,30 @@ def test_build_video_encode_args_software():
     assert "software" in message.lower()
 
 
+def test_build_video_encode_args_nvenc_uses_modern_presets(monkeypatch):
+    import platform
+
+    import encode_profiles as ep
+
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(ep, "check_nvenc_available", lambda: True)
+    settings = VideoEncodeSettings(
+        crf=24,
+        nvenc_cq=26,
+        software_preset="medium",
+        hw_preset="p5",
+        vt_preset="quality",
+        use_hardware=True,
+        auto_hardware=False,
+        archive=False,
+    )
+    args, message = build_video_encode_args(settings, use_hardware=True)
+    assert args[0:2] == ["-c:v", "hevc_nvenc"]
+    assert "-preset" in args and args[args.index("-preset") + 1] == "p5"
+    assert "-cq" in args and args[args.index("-cq") + 1] == "26"
+    assert "NVENC" in message
+
+
 def test_resolve_use_hardware_quality_profile():
     options = ConversionOptions(**profile_to_options_kwargs("quality"))
     settings = settings_from_options(options)

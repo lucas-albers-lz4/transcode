@@ -82,6 +82,8 @@ Press **Enter** to accept the Archive profile, or type `1` (Fast), `2` (Quality)
 | **Fast** | Bulk transcodes when speed matters | NVENC p3 · CQ 28 | Fastest | ~10–30% larger |
 | **Quality** | Best picture · CPU only · small batches | x265 slow · CRF 20 · no GPU | Slowest | ~15–25% smaller |
 
+**Archive** picks hardware or software **per file** during conversion (same recommendation as `--analyze`). Fast forces hardware when available; Quality always uses software `libx265`.
+
 ### All options
 
 | Argument | Description |

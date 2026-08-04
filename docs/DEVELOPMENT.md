@@ -188,10 +188,11 @@ The GUI uses the same `estimate_all_profiles()` function from `workflow.py`. Est
 
 See [TODO.md](TODO.md) for the current task list. Major areas:
 
-- Parallel transcodes (multi-file at once)
+- Parallel transcodes (multi-file at once) — deferred for announce
 - Per-codec disk-space estimates in `analyze_space.py`
 - Ruff deferred rules: `PTH*` pathlib migration, `ANN*` type annotations on CLI entrypoints
-- `--auto-encoder` flag to apply `determine_encode_method()` during conversion (not just analysis)
+
+**Note:** Archive profile auto HW/SW is already shipped via `resolve_use_hardware()` → `determine_encode_method()` during convert. Fast forces hardware; Quality forces software.
 
 ---
 

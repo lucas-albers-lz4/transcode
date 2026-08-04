@@ -20,11 +20,20 @@
 * ✅ Stable error logging format for `analyze_errors.py`
 * ✅ Scan skips files with valid existing HEVC output
 
+## Shipped (audience-ready track)
+
+* ✅ **Archive auto HW/SW** — `resolve_use_hardware()` applies `determine_encode_method()` during convert when the Archive profile is selected (`use_hardware=None`). No separate `--auto-encoder` flag needed.
+
+## Deferred (not for announce)
+
+* **Replace-after-verify** (opt-in source swap) — conflicts with the “never touch originals” promise; highest irreversible risk
+* **Parallel transcodes** — needs GPU contention, space math × N, cancel/progress redesign
+* **Docker / headless image** — out of announce scope
+
 ## Future / Nice-to-Have
 
 * Implement NVENC attached-picture / low-resolution stream handling in `convert_file()`
-* **`--auto-encoder`**: apply `determine_encode_method()` during convert, not just analyze
-* Parallel transcodes
+* Parallel transcodes (see deferred above)
 * Per-codec disk space estimates in `analyze_space.py`
 * Ruff deferred: PTH* pathlib migration, ANN* on CLI scripts (see `docs/DEVELOPMENT.md` Linting section)
 

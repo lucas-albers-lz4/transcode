@@ -43,6 +43,41 @@ def start_stderr_drain(process: subprocess.Popen) -> tuple[list[str], threading.
     return stderr_lines, thread
 
 
+def parse_ffmpeg_major_version(version_text: str) -> int | None:
+    """Extract major version from `ffmpeg -version` output, or None."""
+    match = re.search(r"ffmpeg version (\d+)", version_text, re.IGNORECASE)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def warn_ffmpeg_version_range(min_major: int = 6, max_tested_major: int = 9) -> None:
+    """Print a non-fatal warning when FFmpeg is older than supported or newer than tested."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return
+    major = parse_ffmpeg_major_version(result.stdout or result.stderr or "")
+    if major is None:
+        return
+    if major < min_major:
+        print(
+            f"WARNING: FFmpeg {major}.x is below the supported range "
+            f"({min_major}.x–{max_tested_major}.x). Upgrade if encodes fail.",
+        )
+    elif major > max_tested_major:
+        print(
+            f"WARNING: FFmpeg {major}.x is newer than the tested range "
+            f"(up to {max_tested_major}.x). Conversion will still run; "
+            "report issues if flags change.",
+        )
+
+
 def check_ffmpeg_dependencies(warn_nvenc: bool = False) -> bool:
     """
     Verify ffmpeg and ffprobe are installed.
@@ -61,6 +96,8 @@ def check_ffmpeg_dependencies(warn_nvenc: bool = False) -> bool:
             print("apt-get install ffmpeg  # For Debian/Ubuntu")
             print("yum install ffmpeg      # For CentOS/RHEL")
         return False
+
+    warn_ffmpeg_version_range()
 
     if warn_nvenc and platform.system() == "Linux" and shutil.which("nvidia-smi"):
         try:

@@ -8,6 +8,9 @@ NOT included in this download.
 
 2. Install FFmpeg (once per machine):
 
+   Supported: FFmpeg 6.x–9.x with libx265. For NVIDIA hardware encode,
+   your build must include hevc_nvenc (modern presets p1–p7).
+
    macOS:
      brew install ffmpeg
 
