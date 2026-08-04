@@ -7,6 +7,7 @@ Standalone builds use [PyInstaller](https://pyinstaller.org/) to create a single
 - All runtime dependencies (`uv pip install -r requirements-gui.txt`)
 - PyInstaller (included in `requirements-gui.txt`)
 - On Linux: `python3-tk` system package
+- Version string lives in the root [`VERSION`](../VERSION) file (used in zip names)
 
 ## Build
 
@@ -30,13 +31,31 @@ The built app is placed at `dist/transcode_gui/`.
 
 A build on Apple Silicon runs natively on both ARM64 and (via Rosetta 2) on Intel Macs, but the reverse is not true.
 
-## Release packaging
+## Release packaging (local)
 
 ```bash
-./scripts/package_release.sh
+./scripts/package_release.sh           # macOS / Linux
+powershell -File scripts\package_release.ps1   # Windows
 ```
 
-This creates a zip archive containing the built app plus `packaging/INSTALL.txt`. The release zip is ready to distribute — users just need FFmpeg on their PATH.
+Creates `dist/transcode-gui-vX.Y.Z-<platform>-<arch>.zip` containing the app plus `INSTALL.txt`. Users still need FFmpeg 6.x-9.x on PATH.
+
+## GitHub Release (CI)
+
+Workflow: [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+
+1. Bump [`VERSION`](../VERSION) on `main` if needed and merge packaging changes.
+2. Tag and push:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+3. Actions builds on `ubuntu-latest`, `macos-latest`, and `windows-latest`, then creates a GitHub Release attaching all three zips.
+4. You can also run the workflow manually via **Actions → Release → Run workflow** (builds artifacts; publish job runs only on `v*` tags).
+
+Release notes remind users that FFmpeg is not bundled, and document Gatekeeper / Windows PATH quirks.
 
 ## macOS code signing
 

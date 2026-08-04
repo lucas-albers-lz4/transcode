@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0); leave empty to use VERSION file only for artifact names"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell: bash
+          - os: macos-latest
+            shell: bash
+          - os: windows-latest
+            shell: pwsh
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk zip
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Set up Python venv and GUI deps
+        shell: bash
+        run: |
+          uv venv
+          if [ -f .venv/Scripts/activate ]; then
+            source .venv/Scripts/activate
+          else
+            source .venv/bin/activate
+          fi
+          uv pip install -r requirements-gui.txt
+
+      - name: Package release (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          source .venv/bin/activate
+          ./scripts/package_release.sh
+
+      - name: Package release (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\Activate.ps1
+          .\scripts\package_release.ps1
+
+      - name: Upload release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          path: dist/transcode-gui-v*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          NOTES="$(cat <<EOF
+## HEVC Video Converter ${TAG}
+
+Batch-convert a media library to H.265/HEVC. Source files are never modified.
+
+### Requirements
+- **FFmpeg 6.x-9.x** on PATH (not bundled). See \`INSTALL.txt\` in each zip.
+- Optional hardware: NVIDIA \`hevc_nvenc\` (presets p1-p7) or Apple VideoToolbox.
+
+### Downloads
+Pick the zip for your OS, extract, and run \`transcode_gui\` / \`transcode_gui.exe\`.
+
+### Notes
+- macOS unsigned builds: right-click → Open (Gatekeeper).
+- Windows: install FFmpeg, then open a **new** terminal so PATH updates.
+- FAQ: https://github.com/lucas-albers-lz4/transcode/blob/main/FAQ.md
+
+Project version file: ${VERSION}
+EOF
+)"
+          gh release create "$TAG" artifacts/transcode-gui-v*.zip \
+            --title "HEVC Video Converter ${TAG}" \
+            --notes "$NOTES"
