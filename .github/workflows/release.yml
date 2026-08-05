@@ -40,7 +40,9 @@ jobs:
       - name: Set up Python venv and GUI deps
         shell: bash
         run: |
-          uv venv
+          # Pin 3.12: matplotlib 3.8.2 has no wheels for 3.14 and fails to build on macOS.
+          uv python install 3.12
+          uv venv --python 3.12
           if [ -f .venv/Scripts/activate ]; then
             source .venv/Scripts/activate
           else
