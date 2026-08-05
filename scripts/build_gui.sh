@@ -18,6 +18,11 @@ else
 fi
 
 uv pip install -r requirements-gui.txt
+
+# uv/standalone CPython: Tcl/Tk shared libs live under base_prefix/lib (off ld path).
+_TCL_LIBDIR="$(python -c 'import sys; from pathlib import Path; print(Path(sys.base_prefix) / "lib")')"
+export LD_LIBRARY_PATH="${_TCL_LIBDIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 pyinstaller packaging/transcode_gui.spec --noconfirm
 
 echo

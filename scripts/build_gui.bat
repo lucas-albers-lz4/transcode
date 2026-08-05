@@ -16,6 +16,14 @@ if exist ".venv\Scripts\activate.bat" (
 )
 
 uv pip install -r requirements-gui.txt
+
+REM Tcl/Tk shared libs: packaging\transcode_gui.spec collect_all(tkinter) + _tcl_tk_shared_libs
+REM bundles them for frozen GUI. Optional: prepend %%TCL_LIBRARY%% / base_prefix\DLLs to PATH
+REM if a local Windows build fails to locate tcl86t.dll / similar at analysis time.
+REM if defined VIRTUAL_ENV (
+REM   set "PATH=%VIRTUAL_ENV%\DLLs;%PATH%"
+REM )
+
 pyinstaller packaging\transcode_gui.spec --noconfirm
 
 echo.
