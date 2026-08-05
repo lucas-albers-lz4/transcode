@@ -3,6 +3,7 @@
 Shrink a personal video library to H.265/HEVC without touching the originals — pick two folders and convert with a GUI wizard, or use the CLI overnight.
 
 [![Tests](https://github.com/lucas-albers-lz4/transcode/actions/workflows/test.yml/badge.svg)](https://github.com/lucas-albers-lz4/transcode/actions/workflows/test.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 
 **Why try it**
 
