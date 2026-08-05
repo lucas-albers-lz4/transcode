@@ -86,30 +86,27 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          RELEASE_NOTES: |
+            ## HEVC Video Converter ${{ github.ref_name }}
+
+            Batch-convert a media library to H.265/HEVC. Source files are never modified.
+
+            ### Requirements
+            - **FFmpeg 6.x–9.x** on PATH (not bundled). See `INSTALL.txt` in each zip.
+            - Optional hardware: NVIDIA `hevc_nvenc` (presets p1–p7) or Apple VideoToolbox.
+
+            ### Downloads
+            Pick the zip for your OS, extract, and run `transcode_gui` / `transcode_gui.exe`.
+
+            ### Notes
+            - macOS unsigned builds: right-click → Open (Gatekeeper).
+            - Windows: install FFmpeg, then open a **new** terminal so PATH updates.
+            - FAQ: https://github.com/lucas-albers-lz4/transcode/blob/main/FAQ.md
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
           VERSION="$(tr -d '[:space:]' < VERSION)"
-          NOTES="$(cat <<EOF
-## HEVC Video Converter ${TAG}
+          NOTES="${RELEASE_NOTES}
 
-Batch-convert a media library to H.265/HEVC. Source files are never modified.
-
-### Requirements
-- **FFmpeg 6.x-9.x** on PATH (not bundled). See \`INSTALL.txt\` in each zip.
-- Optional hardware: NVIDIA \`hevc_nvenc\` (presets p1-p7) or Apple VideoToolbox.
-
-### Downloads
-Pick the zip for your OS, extract, and run \`transcode_gui\` / \`transcode_gui.exe\`.
-
-### Notes
-- macOS unsigned builds: right-click → Open (Gatekeeper).
-- Windows: install FFmpeg, then open a **new** terminal so PATH updates.
-- FAQ: https://github.com/lucas-albers-lz4/transcode/blob/main/FAQ.md
-
-Project version file: ${VERSION}
-EOF
-)"
-          gh release create "$TAG" artifacts/transcode-gui-v*.zip \
-            --title "HEVC Video Converter ${TAG}" \
-            --notes "$NOTES"
+          Project version file: ${VERSION}"
+          gh release create "$TAG_NAME" artifacts/transcode-gui-v*.zip             --title "HEVC Video Converter ${TAG_NAME}"             --notes "$NOTES"
